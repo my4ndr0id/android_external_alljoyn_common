@@ -77,6 +77,37 @@ class ManagedObj {
         IncRef();
     }
 
+    /**
+     * Create a copy of managed object T.
+     *
+     * If isDeep is true
+     * Create a deep (clone) copy of a managed object.
+     * A ManagedObject created using this constructor copies the underlying T
+     * object and wraps it in a new ManagedObject with 1 reference.
+     *
+     * if isDeep is false
+     * Do not make a deep copy of the managed object instead make a new reference
+     * to the existing object and increment the reference counter by +1.
+     *
+     * @param other   ManagedObject to make a copy of.
+     * @param isDeep  Specify if this is a deep (clone) copy or a normal copy
+     */
+    ManagedObj<T>(const ManagedObj<T>&other, bool isDeep)
+    {
+        if (isDeep) {
+            /* Deep copy */
+            const size_t offset = (sizeof(ManagedCtx) + 7) & ~0x07;
+            context = reinterpret_cast<ManagedCtx*>(malloc(offset + sizeof(T)));
+            context = new (context) ManagedCtx(1);
+            object = new ((char*)context + offset)T(*other);
+        } else {
+            /* Normal copy constructor (inc ref) of existing object */
+            context = other.context;
+            object = other.object;
+            IncRef();
+        }
+    }
+
     /** Allocate T() on the heap and set it's reference count to 1. */
     ManagedObj<T>()
     {
@@ -84,6 +115,15 @@ class ManagedObj {
         context = reinterpret_cast<ManagedCtx*>(malloc(offset + sizeof(T)));
         context = new (context) ManagedCtx(1);
         object = new ((char*)context + offset)T();
+    }
+
+    /** Constructor to wrap an existing T in its managed object type */
+    ManagedObj<T>(T * naked)
+    {
+        const size_t offset = (sizeof(ManagedCtx) + 7) & ~0x07;
+        object = naked;
+        context = (ManagedCtx*)((char*)object - offset);
+        IncRef();
     }
 
     /**
@@ -157,6 +197,101 @@ class ManagedObj {
     }
 
     /**
+     * Allocate T(arg1, arg2, arg3, arg4, arg5, arg6) on the heap and set it's reference count to 1.
+     * @param arg1   First arg to T constructor.
+     * @param arg2   Second arg to T constructor.
+     * @param arg3   Third arg to T constructor.
+     * @param arg4   Fourth arg to T constructor.
+     * @param arg5   Fifth arg to T constructor.
+     * @param arg6   Sixth arg to T constructor.
+     */
+    template <typename A1, typename A2, typename A3, typename A4, typename A5, typename A6> ManagedObj<T>(A1 & arg1, A2 & arg2, A3 & arg3, A4 & arg4, A5 & arg5, A6 & arg6)
+    {
+        const size_t offset = (sizeof(ManagedCtx) + 7) & ~0x07;
+        context = reinterpret_cast<ManagedCtx*>(malloc(offset + sizeof(T)));
+        context = new (context) ManagedCtx(1);
+        object = new ((char*)context + offset)T(arg1, arg2, arg3, arg4, arg5, arg6);
+    }
+
+    /**
+     * Allocate T(arg1, arg2, arg3, arg4, arg5, arg6, arg7) on the heap and set it's reference count to 1.
+     * @param arg1   First arg to T constructor.
+     * @param arg2   Second arg to T constructor.
+     * @param arg3   Third arg to T constructor.
+     * @param arg4   Fourth arg to T constructor.
+     * @param arg5   Fifth arg to T constructor.
+     * @param arg6   Sixth arg to T constructor.
+     * @param arg7   Seventh arg to T constructor.
+     */
+    template <typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7> ManagedObj<T>(A1 & arg1, A2 & arg2, A3 & arg3, A4 & arg4, A5 & arg5, A6 & arg6, A7 & arg7)
+    {
+        const size_t offset = (sizeof(ManagedCtx) + 7) & ~0x07;
+        context = reinterpret_cast<ManagedCtx*>(malloc(offset + sizeof(T)));
+        context = new (context) ManagedCtx(1);
+        object = new ((char*)context + offset)T(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+    }
+
+    /**
+     * Allocate T(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8) on the heap and set it's reference count to 1.
+     * @param arg1   First arg to T constructor.
+     * @param arg2   Second arg to T constructor.
+     * @param arg3   Third arg to T constructor.
+     * @param arg4   Fourth arg to T constructor.
+     * @param arg5   Fifth arg to T constructor.
+     * @param arg6   Sixth arg to T constructor.
+     * @param arg7   Seventh arg to T constructor.
+     * @param arg8   Eight arg to T constructor.
+     */
+    template <typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7, typename A8> ManagedObj<T>(A1 & arg1, A2 & arg2, A3 & arg3, A4 & arg4, A5 & arg5, A6 & arg6, A7 & arg7, A8 & arg8)
+    {
+        const size_t offset = (sizeof(ManagedCtx) + 7) & ~0x07;
+        context = reinterpret_cast<ManagedCtx*>(malloc(offset + sizeof(T)));
+        context = new (context) ManagedCtx(1);
+        object = new ((char*)context + offset)T(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
+    }
+
+    /**
+     * Allocate T(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) on the heap and set it's reference count to 1.
+     * @param arg1   First arg to T constructor.
+     * @param arg2   Second arg to T constructor.
+     * @param arg3   Third arg to T constructor.
+     * @param arg4   Fourth arg to T constructor.
+     * @param arg5   Fifth arg to T constructor.
+     * @param arg6   Sixth arg to T constructor.
+     * @param arg7   Seventh arg to T constructor.
+     * @param arg8   Eight arg to T constructor.
+     * @param arg9   Ninth arg to T constructor.
+     */
+    template <typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7, typename A8, typename A9> ManagedObj<T>(A1 & arg1, A2 & arg2, A3 & arg3, A4 & arg4, A5 & arg5, A6 & arg6, A7 & arg7, A8 & arg8, A9 & arg9)
+    {
+        const size_t offset = (sizeof(ManagedCtx) + 7) & ~0x07;
+        context = reinterpret_cast<ManagedCtx*>(malloc(offset + sizeof(T)));
+        context = new (context) ManagedCtx(1);
+        object = new ((char*)context + offset)T(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
+    }
+
+    /**
+     * Allocate T(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) on the heap and set it's reference count to 1.
+     * @param arg1   First arg to T constructor.
+     * @param arg2   Second arg to T constructor.
+     * @param arg3   Third arg to T constructor.
+     * @param arg4   Fourth arg to T constructor.
+     * @param arg5   Fifth arg to T constructor.
+     * @param arg6   Sixth arg to T constructor.
+     * @param arg7   Seventh arg to T constructor.
+     * @param arg8   Eight arg to T constructor.
+     * @param arg9   Ninth arg to T constructor.
+     * @param arg10  Tenth arg to T constructor.
+     */
+    template <typename A1, typename A2, typename A3, typename A4, typename A5, typename A6, typename A7, typename A8, typename A9, typename A10> ManagedObj<T>(A1 & arg1, A2 & arg2, A3 & arg3, A4 & arg4, A5 & arg5, A6 & arg6, A7 & arg7, A8 & arg8, A9 & arg9, A10 & arg10)
+    {
+        const size_t offset = (sizeof(ManagedCtx) + 7) & ~0x07;
+        context = reinterpret_cast<ManagedCtx*>(malloc(offset + sizeof(T)));
+        context = new (context) ManagedCtx(1);
+        object = new ((char*)context + offset)T(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
+    }
+
+    /**
      * ManagedObj destructor.
      * Decrement T's reference count and deallocate if zero.
      */
@@ -191,6 +326,14 @@ class ManagedObj {
      * @return  true if the managed objects are equal.
      */
     bool operator==(const ManagedObj<T>& other) const { return (object == other.object) || (*object == *other.object); }
+
+
+    /**
+     * Returns true if the two managed objects managed the same object
+     * @param other  The other managed object to compare.
+     * @return  true if the managed objects refer to the same underlying object.
+     */
+    bool iden(const ManagedObj<T>& other) const { return (object == other.object); }
 
     /**
      * Inequality for managed objects is whatever inequality means for @<T@>

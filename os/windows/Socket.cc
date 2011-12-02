@@ -40,7 +40,11 @@
 #define QCC_MODULE "NETWORK"
 
 /* Scatter gather only support on Vista and later */
+#if !defined (NTDDI_VERSION) || !defined (NTDDI_VISTA) || (NTDDI_VERSION < NTDDI_VISTA)
 #define QCC_USE_SCATTER_GATHER 0
+#else
+#define QCC_USE_SCATTER_GATHER 1
+#endif
 
 
 namespace qcc {
@@ -65,23 +69,24 @@ static qcc::String StrError()
 
 }
 
-static void MakeSockAddr(const IPAddress& addr, uint16_t port,
-                         sockaddr_in* addrBuf, socklen_t& addrSize)
+static void MakeSockAddr(const IPAddress& addr,
+                         uint16_t port,
+                         SOCKADDR_STORAGE* addrBuf,
+                         socklen_t& addrSize)
 {
+    memset(addrBuf, 0, addrSize);
     if (addr.IsIPv4()) {
         struct sockaddr_in* sa = reinterpret_cast<struct sockaddr_in*>(addrBuf);
-        assert(addrSize >= sizeof(*sa));
         sa->sin_family = AF_INET;
         sa->sin_port = htons(port);
         sa->sin_addr.s_addr = addr.GetIPv4AddressNetOrder();
+        addrSize = sizeof(*sa);
     } else {
         struct sockaddr_in6* sa = reinterpret_cast<struct sockaddr_in6*>(addrBuf);
-        assert(addrSize >= sizeof(*sa));
         sa->sin6_family = AF_INET6;
         sa->sin6_port = htons(port);
-        sa->sin6_flowinfo = 0;  // TODO: What should go here???
         addr.RenderIPv6Binary(sa->sin6_addr.s6_addr, sizeof(sa->sin6_addr.s6_addr));
-        sa->sin6_scope_id = 0;  // TODO: What should go here???
+        addrSize = sizeof(*sa);
     }
 }
 
@@ -128,11 +133,11 @@ static QStatus GetSockAddr(const SOCKADDR_STORAGE* addrBuf, socklen_t addrSize,
     char hostname[NI_MAXHOST];
     char servInfo[NI_MAXSERV];
 
-    DWORD dwRetval = getnameinfo((struct sockaddr*) addrBuf,
-                                 sizeof (struct sockaddr),
-                                 hostname,
-                                 NI_MAXHOST, servInfo,
-                                 NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV);
+    DWORD dwRetval = getnameinfo((struct sockaddr*)addrBuf,
+                                 sizeof (SOCKADDR_STORAGE),
+                                 hostname, NI_MAXHOST,
+                                 servInfo, NI_MAXSERV,
+                                 NI_NUMERICHOST | NI_NUMERICSERV);
 
     if (dwRetval != 0) {
         status = ER_OS_ERROR;
@@ -145,6 +150,15 @@ static QStatus GetSockAddr(const SOCKADDR_STORAGE* addrBuf, socklen_t addrSize,
     return status;
 }
 
+uint32_t GetLastError()
+{
+    return WSAGetLastError();
+}
+
+qcc::String GetLastErrorString()
+{
+    return StrError();
+}
 
 QStatus Socket(AddressFamily addrFamily, SocketType type, SocketFd& sockfd)
 {
@@ -177,7 +191,7 @@ QStatus Connect(SocketFd sockfd, const IPAddress& remoteAddr, uint16_t remotePor
 {
     QStatus status = ER_OK;
     int ret;
-    sockaddr_in addr;
+    SOCKADDR_STORAGE addr;
     socklen_t addrLen = sizeof(addr);
 
     QCC_DbgTrace(("Connect(sockfd = %d, remoteAddr = %s, remotePort = %hu)",
@@ -228,7 +242,7 @@ QStatus Bind(SocketFd sockfd, const IPAddress& localAddr, uint16_t localPort)
 {
     QStatus status = ER_OK;
     int ret;
-    sockaddr_in addr;
+    SOCKADDR_STORAGE addr;
     socklen_t addrLen = sizeof(addr);
 
     QCC_DbgTrace(("Bind(sockfd = %d, localAddr = %s, localPort = %hu)",
@@ -428,7 +442,7 @@ QStatus GetLocalAddress(SocketFd sockfd, IPAddress& addr, uint16_t& port)
 }
 
 
-QStatus Send(SocketFd sockfd, const void* buf, size_t len, size_t& sent)
+QStatus Send(SocketFd sockfd, const void* buf, size_t len, size_t& sent, uint32_t timeout)
 {
     QStatus status = ER_OK;
     size_t ret;
@@ -459,7 +473,7 @@ QStatus SendTo(SocketFd sockfd, IPAddress& remoteAddr, uint16_t remotePort,
                const void* buf, size_t len, size_t& sent)
 {
     QStatus status = ER_OK;
-    sockaddr_in addr;
+    SOCKADDR_STORAGE addr;
     socklen_t addrLen = sizeof(addr);
     size_t ret;
 
@@ -490,36 +504,37 @@ QStatus SendTo(SocketFd sockfd, IPAddress& remoteAddr, uint16_t remotePort,
 
 #if QCC_USE_SCATTER_GATHER
 
-static QStatus SendSGCommon(SocketFd sockfd, sockaddr_in* addr, socklen_t addrLen,
-                            const ScatterGatherList& sg, size_t& sent)
+static QStatus SendSGCommon(SocketFd sockfd,
+                            SOCKADDR_STORAGE* addr,
+                            socklen_t addrLen,
+                            const ScatterGatherList& sg,
+                            size_t& sent)
 {
     QStatus status = ER_OK;
-    size_t ret;
-    size_t index;
-    WSAMSG msg;
-    WSABUF* iov;
-    WSABUF control;
-    ScatterGatherList::const_iterator iter;
 
     QCC_DbgTrace(("SendSGCommon(sockfd = %d, *addr, addrLen, sg, sent = <>)", sockfd));
 
-    iov = new WSABUF[sg.Size()];
-    for (index = 0, iter = sg.Begin(); iter != sg.End(); ++index, ++iter) {
+    /*
+     * We will usually avoid the memory allocation
+     */
+    WSABUF iovAuto[8];
+    WSABUF* iov = sg.Size() <= ArraySize(iovAuto) ? iovAuto : new WSABUF[sg.Size()];
+    ScatterGatherList::const_iterator iter = sg.Begin();
+    for (size_t index = 0; iter != sg.End(); ++index, ++iter) {
         iov[index].buf = iter->buf;
         iov[index].len = iter->len;
         QCC_DbgLocalData(iov[index].buf, iov[index].len);
     }
 
+    WSAMSG msg;
+    memset(&msg, 0, sizeof(msg));
     msg.name = reinterpret_cast<LPSOCKADDR>(addr);
     msg.namelen = addrLen;
     msg.lpBuffers = iov;
     msg.dwBufferCount = sg.Size();
-    msg.Control = control;
-    control.len = 0;
-    msg.dwFlags = 0;
 
     DWORD dwsent;
-    ret = WSASendMsg(static_cast<SOCKET>(sockfd), &msg, 0, &dwsent, NULL, NULL);
+    DWORD ret = WSASendMsg(static_cast<SOCKET>(sockfd), &msg, 0, &dwsent, NULL, NULL);
     if (ret == SOCKET_ERROR) {
         if (WSAGetLastError() == WSAEWOULDBLOCK) {
             status = ER_WOULDBLOCK;
@@ -532,7 +547,9 @@ static QStatus SendSGCommon(SocketFd sockfd, sockaddr_in* addr, socklen_t addrLe
     QCC_DbgPrintf(("Sent %u bytes", dwsent));
     sent = dwsent;
 
-    delete[] iov;
+    if (iov != iovAuto) {
+        delete[] iov;
+    }
     return status;
 }
 
@@ -546,7 +563,7 @@ QStatus SendSG(SocketFd sockfd, const ScatterGatherList& sg, size_t& sent)
 QStatus SendToSG(SocketFd sockfd, IPAddress& remoteAddr, uint16_t remotePort,
                  const ScatterGatherList& sg, size_t& sent)
 {
-    sockaddr_in addr;
+    SOCKADDR_STORAGE addr;
     socklen_t addrLen = sizeof(addr);
 
     QCC_DbgTrace(("SendToSG(sockfd = %d, remoteAddr = %s, remotePort = %u, sg, sent = <>)",
@@ -646,34 +663,50 @@ QStatus RecvFrom(SocketFd sockfd, IPAddress& remoteAddr, uint16_t& remotePort,
 
 #if QCC_USE_SCATTER_GATHER
 
-static QStatus RecvSGCommon(SocketFd sockfd, SOCKADDR_STORAGE* addr, socklen_t* addrLen,
+static QStatus RecvSGCommon(SocketFd sockfd, SOCKADDR_STORAGE* addr, socklen_t& addrLen,
                             ScatterGatherList& sg, size_t& received)
 {
+    static LPFN_WSARECVMSG WSARecvMsg = NULL;
     QStatus status = ER_OK;
-    size_t ret;
-    WSAMSG msg;
-    size_t index;
-    WSABUF* iov;
-    WSABUF control;
-    ScatterGatherList::const_iterator iter;
-    QCC_DbgTrace(("RecvSGCommon(sockfd = &d, addr, addrLen, sg = <>, received = <>)",
-                  sockfd));
+    DWORD dwRecv;
+    DWORD ret;
 
-    iov = new WSABUF[sg.Size()];
-    for (index = 0, iter = sg.Begin(); iter != sg.End(); ++index, ++iter) {
+    QCC_DbgTrace(("RecvSGCommon(sockfd = &d, addr, addrLen, sg = <>, received = <>)", sockfd));
+
+    /*
+     * Get extension function pointer
+     */
+    if (!WSARecvMsg) {
+        GUID guid = WSAID_WSARECVMSG;
+        ret = WSAIoctl(static_cast<SOCKET>(sockfd), SIO_GET_EXTENSION_FUNCTION_POINTER,
+                       &guid, sizeof(guid),
+                       &WSARecvMsg, sizeof(WSARecvMsg),
+                       &dwRecv, NULL, NULL);
+        if (ret == SOCKET_ERROR) {
+            status = ER_OS_ERROR;
+            QCC_LogError(status, ("Receive: %s", StrError().c_str()));
+            return status;
+        }
+    }
+    /*
+     * We will usually avoid the memory allocation
+     */
+    WSABUF iovAuto[8];
+    WSABUF* iov = sg.Size() <= ArraySize(iovAuto) ? iovAuto : new WSABUF[sg.Size()];
+    ScatterGatherList::const_iterator iter = sg.Begin();
+    for (size_t index = 0; iter != sg.End(); ++index, ++iter) {
         iov[index].buf = iter->buf;
         iov[index].len = iter->len;
     }
 
+    WSAMSG msg;
+    memset(&msg, 0, sizeof(msg));
     msg.name = reinterpret_cast<LPSOCKADDR>(addr);
-    msg.namelen = *addrLen;
+    msg.namelen = addrLen;
     msg.lpBuffers = iov;
     msg.dwBufferCount = sg.Size();
-    msg.Control = control;
-    control.len = 0;
-    msg.dwFlags = 0;
 
-    ret = WSARecvMsg(static_cast<SOCKET>(sockfd), &msg, 0, received, NULL, NULL);
+    ret = WSARecvMsg(static_cast<SOCKET>(sockfd), &msg, &dwRecv, NULL, NULL);
     if (ret == SOCKET_ERROR) {
         if (WSAGetLastError() == WSAEWOULDBLOCK) {
             received = 0;
@@ -684,30 +717,28 @@ static QStatus RecvSGCommon(SocketFd sockfd, SOCKADDR_STORAGE* addr, socklen_t* 
         }
     } else {
         sg.SetDataSize(received);
-        *addrLen = msg.namelen;
+        addrLen = msg.namelen;
+        received = dwRecv;
     }
-    delete[] iov;
-
 #if !defined(NDEBUG)
     QCC_DbgPrintf(("Received %u bytes", received));
     for (iter = sg.Begin(); iter != sg.End(); ++iter) {
         QCC_DbgRemoteData(iter->buf, iter->len);
     }
 #endif
-
+    if (iov != iovAuto) {
+        delete[] iov;
+    }
     return status;
 }
-
-
 
 QStatus RecvSG(SocketFd sockfd, ScatterGatherList& sg, size_t& received)
 {
     socklen_t addrLen = 0;
     QCC_DbgTrace(("RecvSG(sockfd = %d, sg = <>, received = <>)", sockfd));
 
-    return RecvSGCommon(sockfd, NULL, &addrLen, sg, received);
+    return RecvSGCommon(sockfd, NULL, addrLen, sg, received);
 }
-
 
 QStatus RecvFromSG(SocketFd sockfd, IPAddress& remoteAddr, uint16_t& remotePort,
                    ScatterGatherList& sg, size_t& received)
@@ -716,7 +747,7 @@ QStatus RecvFromSG(SocketFd sockfd, IPAddress& remoteAddr, uint16_t& remotePort,
     SOCKADDR_STORAGE addr;
     socklen_t addrLen = sizeof(addr);
 
-    status = RecvSGCommon(sockfd, &addr, &addrLen, sg, received);
+    status = RecvSGCommon(sockfd, &addr, addrLen, sg, received);
     if (ER_OK == status) {
         GetSockAddr(&addr, addrLen, remoteAddr, remotePort);
         QCC_DbgTrace(("RecvFromSG(sockfd = %d, remoteAddr = %s, remotePort = %u, sg = <>, rcvd = %u)",
@@ -725,8 +756,8 @@ QStatus RecvFromSG(SocketFd sockfd, IPAddress& remoteAddr, uint16_t& remotePort,
     return status;
 }
 
-
 #else
+
 QStatus RecvSG(SocketFd sockfd, ScatterGatherList& sg, size_t& received)
 {
     QStatus status = ER_OK;
@@ -764,7 +795,8 @@ QStatus RecvFromSG(SocketFd sockfd, IPAddress& remoteAddr, uint16_t& remotePort,
 
 int InetPtoN(int af, const char* src, void* dst)
 {
-    int err;
+    int err = -1;
+    WSAIncRefCount();
     if (af == AF_INET6) {
         struct sockaddr_in6 sin6;
         int sin6Len = sizeof(sin6);
@@ -773,10 +805,8 @@ int InetPtoN(int af, const char* src, void* dst)
         err = WSAStringToAddressA((LPSTR)src, AF_INET6, NULL, (struct sockaddr*)&sin6, &sin6Len);
         if (!err) {
             memcpy(dst, &sin6.sin6_addr, sizeof(sin6.sin6_addr));
-            return 1;
         }
-    }
-    if (af == AF_INET) {
+    } else if (af == AF_INET) {
         struct sockaddr_in sin;
         int sinLen = sizeof(sin);
         memset(&sin, 0, sinLen);
@@ -784,15 +814,16 @@ int InetPtoN(int af, const char* src, void* dst)
         err = WSAStringToAddressA((LPSTR)src, AF_INET, NULL, (struct sockaddr*)&sin, &sinLen);
         if (!err) {
             memcpy(dst, &sin.sin_addr, sizeof(sin.sin_addr));
-            return 1;
         }
     }
-    return -1;
+    WSADecRefCount();
+    return err ? -1 : 1;
 }
-
 
 const char* InetNtoP(int af, const void* src, char* dst, socklen_t size)
 {
+    int err = -1;
+    WSAIncRefCount();
     DWORD sz = (DWORD)size;
     if (af == AF_INET6) {
         struct sockaddr_in6 sin6;
@@ -800,20 +831,16 @@ const char* InetNtoP(int af, const void* src, char* dst, socklen_t size)
         sin6.sin6_family = AF_INET6;
         sin6.sin6_flowinfo = 0;
         memcpy(&sin6.sin6_addr, src, sizeof(sin6.sin6_addr));
-        if (WSAAddressToStringA((struct sockaddr*)&sin6, sizeof(sin6), NULL, dst, &sz) == 0) {
-            return dst;
-        }
-    }
-    if (af == AF_INET) {
+        err = WSAAddressToStringA((struct sockaddr*)&sin6, sizeof(sin6), NULL, dst, &sz);
+    } else if (af == AF_INET) {
         struct sockaddr_in sin;
         memset(&sin, 0, sizeof(sin));
         sin.sin_family = AF_INET;
         memcpy(&sin.sin_addr, src, sizeof(sin.sin_addr));
-        if (WSAAddressToStringA((struct sockaddr*)&sin, sizeof(sin), NULL, dst, &sz) == 0) {
-            return dst;
-        }
+        err = WSAAddressToStringA((struct sockaddr*)&sin, sizeof(sin), NULL, dst, &sz);
     }
-    return NULL;
+    WSADecRefCount();
+    return err ? NULL : dst;
 }
 
 QStatus RecvWithFds(SocketFd sockfd, void* buf, size_t len, size_t& received, SocketFd* fdList, size_t maxFds, size_t& recvdFds)
@@ -1054,6 +1081,18 @@ QStatus SetBlocking(SocketFd sockfd, bool blocking)
     if (ret == SOCKET_ERROR) {
         status = ER_OS_ERROR;
         QCC_LogError(status, ("Failed to set socket non-blocking %s", StrError().c_str()));
+    }
+    return status;
+}
+
+QStatus SetNagle(SocketFd sockfd, bool useNagle)
+{
+    QStatus status = ER_OK;
+    int arg = useNagle ? 1 : -0;
+    int r = setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (char*)&arg, sizeof(int));
+    if (r != 0) {
+        status = ER_OS_ERROR;
+        QCC_LogError(status, ("Setting TCP_NODELAY failed: (%d) %s", errno, strerror(errno)));
     }
     return status;
 }

@@ -30,6 +30,7 @@
 #include <qcc/KeyBlob.h>
 #include <qcc/Crypto.h>
 #include <qcc/String.h>
+#include <qcc/Util.h>
 #include <Status.h>
 
 using namespace std;
@@ -48,6 +49,8 @@ void KeyBlob::Erase()
         blobType = EMPTY;
         data = NULL;
         size = 0;
+        expiration.seconds = 0;
+        role = NO_ROLE;
     }
 }
 
@@ -56,6 +59,7 @@ KeyBlob::KeyBlob(const qcc::String& secret, size_t len, const Type initType) : b
     if (blobType != EMPTY) {
         size = (uint16_t)len;
         data = new uint8_t[len];
+        role = NO_ROLE;
         uint8_t* p = data;
 
         while (len) {
@@ -87,11 +91,9 @@ void KeyBlob::Rand(const size_t len, const Type initType)
     Erase();
     if (initType != EMPTY) {
         blobType = initType;
-        Crypto_BigNum bigNum;
-        bigNum.GenerateRandomValue(len * 8);
         size = (uint16_t)len;
         data = new uint8_t[len];
-        bigNum.RenderBinary(data, len);
+        Crypto_GetRandomBytes(data, len);
     }
 }
 
@@ -132,7 +134,10 @@ QStatus KeyBlob::Store(qcc::Sink& sink) const
     status = sink.PushBytes(&flags, sizeof(flags), pushed);
     if ((status == ER_OK) && (blobType != EMPTY)) {
         if (flags & EXPIRES_FLAG) {
-            status = sink.PushBytes(&expiration, sizeof(expiration), pushed);
+            status = sink.PushBytes(&expiration.seconds, sizeof(expiration.seconds), pushed);
+            if (status == ER_OK) {
+                status = sink.PushBytes(&expiration.mseconds, sizeof(expiration.mseconds), pushed);
+            }
         }
         if (status == ER_OK) {
             status = sink.PushBytes(tag.data(), tag.size(), pushed);
@@ -163,7 +168,10 @@ QStatus KeyBlob::Load(qcc::Source& source)
             status = ER_CORRUPT_KEYBLOB;
         }
         if ((status == ER_OK) && (flags & EXPIRES_FLAG)) {
-            status = source.PullBytes(&expiration, sizeof(expiration), pulled);
+            status = source.PullBytes(&expiration.seconds, sizeof(expiration.seconds), pulled);
+            if (status == ER_OK) {
+                status = source.PullBytes(&expiration.mseconds, sizeof(expiration.mseconds), pulled);
+            }
         }
         if (status == ER_OK) {
             char tagBytes[MAx_TAG_LEN];
@@ -204,6 +212,7 @@ KeyBlob::KeyBlob(const KeyBlob& other)
         size = other.size;
         expiration = other.expiration;
         tag = other.tag;
+        role = other.role;
     } else {
         data = NULL;
         size = 0;
@@ -223,6 +232,7 @@ KeyBlob& KeyBlob::operator=(const KeyBlob& other)
             blobType = other.blobType;
             expiration = other.expiration;
             tag = other.tag;
+            role = other.role;
         }
     }
     return *this;

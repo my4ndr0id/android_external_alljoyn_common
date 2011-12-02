@@ -22,6 +22,8 @@
  *    limitations under the License.
  ******************************************************************************/
 
+#include <algorithm>
+
 #include <qcc/platform.h>
 
 #include <assert.h>
@@ -44,18 +46,24 @@ class KeyBlob {
      * Type of key blob.
      */
     typedef enum {
-        EMPTY,    // < Key blob is empty.
-        GENERIC,  // < Generic key blob - unknown type.
-        AES,      // < An AES key (length is obtained from the blob size)
-        PKCS8,    // < PKCS8 encoded private key.
-        PEM,      // < PEM encoded public key cert.
-        INVALID   // < Invalid key bloby - This must be the last type
+        EMPTY,    ///< Key blob is empty.
+        GENERIC,  ///< Generic key blob - unknown type.
+        AES,      ///< An AES key (length is obtained from the blob size)
+        PRIVATE,  ///< An encrypted private key.
+        PEM,      ///< PEM encoded public key cert.
+        INVALID   ///< Invalid key bloby - This must be the last type
     } Type;
 
+    typedef enum {
+        NO_ROLE,    ///< Key blob creator has no role
+        INITIATOR,  ///< Key blob creator was an initiator
+        RESPONDER   ///< Key blob creator was a reponder
+    } Role;
+
     /**
-     * Constructor.
+     * Default constructor.
      */
-    KeyBlob() : blobType(EMPTY) { }
+    KeyBlob() : blobType(EMPTY), role(NO_ROLE) { }
 
     /**
      * Constructor that reproducibly initializes a key blob with data derived from a password.
@@ -154,8 +162,9 @@ class KeyBlob {
     /**
      * Set the key blob from a byte array.
      *
-     * @param key   Pointer to memory containing the key blob.
-     * @param len   The length of the key in bytes.
+     * @param key       Pointer to memory containing the key blob.
+     * @param len       The length of the key in bytes.
+     * @param blobType  The type of the key blob
      *
      * @return ER_OK if the key was set
      */
@@ -181,18 +190,67 @@ class KeyBlob {
     KeyBlob& operator=(const KeyBlob& other);
 
     /**
-     * Set an expiration date/time on a key blob.
+     * Set an absolute expiration date/time on a key blob.
      *
      * @param expires The expiration date/time.
      */
     void SetExpiration(const Timespec& expires) { expiration = expires; }
 
     /**
-     * Set a tag on the keyblob. A tag in an arbitrary string of 63 characters or less.
-     *
-     * @param tag  The tag value to set.
+     * Default minimun expiration time for a key. If keys are expired too quickly they can end up
+     * expiring before they get used for the first time so the default should allow for this.
      */
-    void SetTag(const qcc::String& tag) { this->tag = tag.substr(0, 63); }
+    static const uint32_t MIN_EXPIRATION_DEFAULT = 30;
+
+    /**
+     * Set a relative expiration date/time on a key blob.
+     *
+     * @param expiresInSeconds The number of seconds that the key will expire in. The max uint32
+     *                         value indicates there is no expiration time.
+     * @param minExpiration    Optional minimum expiration time.
+     */
+    void SetExpiration(uint32_t expiresInSeconds, uint32_t minExpiration = MIN_EXPIRATION_DEFAULT) {
+        if (expiresInSeconds == 0xFFFFFFFF) {
+            expiration.seconds = 0;
+        } else {
+            expiration = Timespec((uint64_t) std::max(minExpiration, expiresInSeconds) * 1000, TIME_RELATIVE);
+        }
+    }
+
+    /**
+     * Get an expiration date/time of a key blob if one was set.
+     *
+     * @param expires Retruns the expiration date/time if one was set.
+     *
+     * @return  true if an expiration time is set for this key blob.
+     */
+    bool GetExpiration(Timespec& expires) const {
+        expires = expiration;
+        return expiration.seconds != 0;
+    }
+
+    /**
+     * Set a tag on the keyblob. A tag in an arbitrary string of 63 characters or less. The
+     * role indicates if the creator of the key blob was an initiator or a responder.
+     *
+     * @param tag   The tag value to set.
+     * @param role  The role of the key blob creator
+     */
+    void SetTag(const qcc::String& tag, Role role = NO_ROLE) { this->tag = tag.substr(0, 63); this->role = role; }
+
+    /**
+     * Gets the creator's role from a key blob
+     *
+     * @return  The creator's role
+     */
+    Role GetRole() const { return role; }
+
+    /**
+     * Get the opposite role of the creator's role
+     *
+     * @return  The opposite of the creator's role
+     */
+    Role GetAntiRole() const { return role == NO_ROLE ? role : (role == RESPONDER ? INITIATOR : RESPONDER); }
 
     /**
      * Get the tag from the keyblob. A tag in an arbitrary string that associates user specified
@@ -217,6 +275,7 @@ class KeyBlob {
     uint8_t* data;
     uint16_t size;
     qcc::String tag;
+    Role role;
 
 };
 

@@ -35,12 +35,15 @@ namespace qcc {
 /** @internal Forward declaration */
 class Timer;
 class Alarm;
+class TimerThread;
+
 
 /**
  * An alarm listener is capable of receiving alarm callbacks
  */
 class AlarmListener {
     friend class Timer;
+    friend class TimerThread;
 
   public:
     /**
@@ -61,6 +64,7 @@ class AlarmListener {
 
 class Alarm {
     friend class Timer;
+    friend class TimerThread;
 
   public:
 
@@ -142,7 +146,8 @@ class Alarm {
 };
 
 
-class Timer : public Thread {
+class Timer : public ThreadListener {
+    friend class TimerThread;
 
   public:
 
@@ -151,8 +156,43 @@ class Timer : public Thread {
      *
      * @param name          Name for the thread.
      * @param expireOnExit  If true call all pending alarms when this thread exits.
+     * @param concurency    Dispatch up to this number of alarms concurently (using multiple threads).
      */
-    Timer(const char* name = "timer", bool expireOnExit = false) : Thread(name), currentAlarm(NULL), expireOnExit(expireOnExit) { }
+    Timer(const char* name = "timer", bool expireOnExit = false, uint32_t concurency = 1);
+
+    /**
+     * Destructor.
+     */
+    ~Timer();
+
+    /**
+     * Start the timer.
+     *
+     * @return  ER_OK if successful.
+     */
+    QStatus Start();
+
+    /**
+     * Stop the timer (and its associated threads).
+     *
+     * @return ER_OK if successful.
+     */
+    QStatus Stop();
+
+    /**
+     * Join the timer.
+     * Block the caller until all the timer's threads are stopped.
+     *
+     * @return ER_OK if successful.
+     */
+    QStatus Join();
+
+    /**
+     * Return true if Timer is running.
+     *
+     * @return true iff timer is running.
+     */
+    bool IsRunning() const { return isRunning; }
 
     /**
      * Associate an alarm with a timer.
@@ -164,9 +204,10 @@ class Timer : public Thread {
     /**
      * Disassociate an alarm from a timer.
      *
-     * @param alarm     Alarm to remove.
+     * @param alarm             Alarm to remove.
+     * @param blockIfTriggered  If alarm has already been triggered, block the caller until AlarmTriggered returns.
      */
-    void RemoveAlarm(const Alarm& alarm);
+    void RemoveAlarm(const Alarm& alarm, bool blockIfTriggered = true);
 
     /**
      * Remove any alarm for a specific listener returning the alarm. Returns a boolean if an alarm
@@ -177,7 +218,30 @@ class Timer : public Thread {
      * @param listener  The specific listener.
      * @param alarm     Alarm that was removed
      */
-    bool RemoveAlarm(AlarmListener* listener, Alarm& alarm);
+    bool RemoveAlarm(const AlarmListener& listener, Alarm& alarm);
+
+    /**
+     * Replace an existing Alarm.
+     * Alarms that are  already "in-progress" (meaning they are scheduled for callback) cannot be replaced.
+     * In this case, RemoveAlarm will return ER_NO_SUCH_ALARM and may optionally block until the triggered
+     * alarm's AlarmTriggered callback has returned.
+     *
+     * @param origAlarm    Existing alarm to be replaced.
+     * @param newAlarm     Alarm that will replace origAlarm if found.
+     * @param blockIfTriggered  If alarm has already been triggered, block the caller until AlarmTriggered returns.
+     *
+     * @return  ER_OK if alarm was replaced
+     *          ER_NO_SUCH_ALARM if origAlarm was already triggered or didn't exist.
+     *          Any other error indicates that adding newAlarm failed (orig alarm will have been removed in this case).
+     */
+    QStatus ReplaceAlarm(const Alarm& origAlarm, const Alarm& newAlarm, bool blockIfTriggered = true);
+
+    /**
+     * Remove all pending alarms with a given alarm listener.
+     *
+     * @param listener   AlarmListener whose alarms will be removed from this timer.
+     */
+    void RemoveAlarmsWithListener(const AlarmListener& listener);
 
     /*
      * Test if the specified alarm is associated with this timer.
@@ -188,21 +252,23 @@ class Timer : public Thread {
      */
     bool HasAlarm(const Alarm& alarm);
 
-  protected:
-
     /**
-     * Thread entry point.
-     *
-     * @param arg  Unused thread arg
+     * TimerThread ThreadExit callback.
+     * For internal use only.
      */
-    ThreadReturn STDCALL Run(void* arg);
+    void ThreadExit(qcc::Thread* thread);
 
   private:
 
     Mutex lock;
-    std::set<Alarm, std::less<Alarm> >  alarms;
+    std::multiset<Alarm, std::less<Alarm> >  alarms;
     Alarm* currentAlarm;
     bool expireOnExit;
+    uint32_t concurency;
+    std::vector<TimerThread*> timerThreads;
+    bool isRunning;
+    int32_t controllerIdx;
+    qcc::Timespec yieldControllerTime;
 };
 
 }

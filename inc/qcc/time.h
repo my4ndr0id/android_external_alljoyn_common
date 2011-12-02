@@ -23,6 +23,7 @@
 #define _QCC_TIME_H
 
 #include <qcc/platform.h>
+#include <qcc/String.h>
 
 namespace qcc {
 
@@ -104,9 +105,16 @@ struct Timespec {
 
 /**
  * Return (non-absolute) timestamp in milliseconds.
+ * Deprecated due to rollover every 8 days.
  * @return  timestamp in milliseconds.
  */
 uint32_t GetTimestamp(void);
+
+/**
+ * Return (non-absolute) timestamp in milliseconds.
+ * @return  timestamp in milliseconds.
+ */
+uint64_t GetTimestamp64(void);
 
 inline Timespec operator+(const Timespec& tsa, const Timespec& tsb)
 {
@@ -129,6 +137,13 @@ inline int64_t operator-(const Timespec& ts1, const Timespec& ts2)
     return ((int64_t)ts1.seconds - (int64_t)ts2.seconds) * 1000 + (int64_t)ts1.mseconds - (int64_t)ts2.mseconds;
 }
 
-}
+/**
+ * Return a formatted string for current UTC date and time. Format conforms to RFC 1123
+ * e.g. "Tue, 30 Aug 2011 17:01:45 GMT"
+ *
+ * @return  The formatted date/time string.
+ */
+qcc::String UTCTime();
 
+}
 #endif

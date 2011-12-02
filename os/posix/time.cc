@@ -23,10 +23,30 @@
 #include <qcc/platform.h>
 
 #include <time.h>
+#include <stdio.h>
+
+#if defined(QCC_OS_DARWIN)
+#include <sys/time.h>
+#endif
 
 #include <qcc/time.h>
 
+
+
 using namespace qcc;
+
+static void platform_gettime(struct timespec* ts)
+{
+
+#if defined(QCC_OS_DARWIN)
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    ts->tv_sec = tv.tv_sec;
+    ts->tv_nsec = tv.tv_usec * 1000;
+#else
+    clock_gettime(CLOCK_MONOTONIC, ts);
+#endif
+}
 
 static time_t s_clockOffset = 0;
 
@@ -35,7 +55,24 @@ uint32_t qcc::GetTimestamp(void)
     struct timespec ts;
     uint32_t ret_val;
 
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    platform_gettime(&ts);
+
+    if (0 == s_clockOffset) {
+        s_clockOffset = ts.tv_sec;
+    }
+
+    ret_val = ((uint32_t)(ts.tv_sec - s_clockOffset)) * 1000;
+    ret_val += (uint32_t)ts.tv_nsec / 1000000;
+
+    return ret_val;
+}
+
+uint64_t qcc::GetTimestamp64(void)
+{
+    struct timespec ts;
+    uint64_t ret_val;
+
+    platform_gettime(&ts);
 
     if (0 == s_clockOffset) {
         s_clockOffset = ts.tv_sec;
@@ -50,7 +87,27 @@ uint32_t qcc::GetTimestamp(void)
 void qcc::GetTimeNow(Timespec* ts)
 {
     struct timespec _ts;
-    clock_gettime(CLOCK_MONOTONIC, &_ts);
+    platform_gettime(&_ts);
     ts->seconds = _ts.tv_sec;
     ts->mseconds = _ts.tv_nsec / 1000000;
+}
+
+qcc::String qcc::UTCTime()
+{
+    static const char* Day[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+    static const char* Month[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+    char buf[32];
+    time_t t;
+    time(&t);
+    struct tm* utc = gmtime(&t);
+    snprintf(buf, 32, "%s, %02d %s %04d %02d:%02d:%02d GMT",
+             Day[utc->tm_wday],
+             utc->tm_mday,
+             Month[utc->tm_mon],
+             1900 + utc->tm_year,
+             utc->tm_hour,
+             utc->tm_min,
+             utc->tm_sec);
+
+    return buf;
 }

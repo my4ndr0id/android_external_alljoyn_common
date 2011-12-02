@@ -199,6 +199,5 @@ QStatus Exec(const char* exec, const ExecArgs& args, const qcc::Environ& envs);
  */
 QStatus ExecAs(const char* user, const char* exec, const ExecArgs& args, const qcc::Environ& envs);
 
-
 };
 #endif

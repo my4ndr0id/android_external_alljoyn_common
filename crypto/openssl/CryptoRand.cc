@@ -1,11 +1,11 @@
 /**
  * @file
  *
- * This file implements qcc::Stream.
+ * Platform-specific secure random number generator
  */
 
 /******************************************************************************
- * Copyright 2009-2011, Qualcomm Innovation Center, Inc.
+ * Copyright 2010-2011, Qualcomm Innovation Center, Inc.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -22,38 +22,23 @@
 
 #include <qcc/platform.h>
 
-#include <qcc/String.h>
-#include <qcc/Stream.h>
+#include <openssl/bn.h>
+#include <qcc/Crypto.h>
 
 #include <Status.h>
 
-#define QCC_MODULE "STREAM"
 
-using namespace std;
-using namespace qcc;
+#define QCC_MODULE  "CRYPTO"
 
-Source Source::nullSource;
-
-QStatus Source::GetLine(qcc::String& outStr, uint32_t timeout)
+QStatus qcc::Crypto_GetRandomBytes(uint8_t* data, size_t len)
 {
-    QStatus status;
-    uint8_t c;
-    size_t actual;
-    bool hasBytes = false;
-
-    while (true) {
-        status = PullBytes(&c, 1, actual, timeout);
-        if (ER_OK != status) {
-            break;
-        }
-        hasBytes = true;
-        if ('\r' == c) {
-            continue;
-        } else if ('\n' == c) {
-            break;
-        } else {
-            outStr.push_back(c);
-        }
+    QStatus status = ER_OK;
+    BIGNUM* rand = BN_new();
+    if (BN_rand(rand, len * 8, -1, 0)) {
+        BN_bn2bin(rand, data);
+    } else {
+        status = ER_CRYPTO_ERROR;
     }
-    return ((status == ER_NONE) && hasBytes) ? ER_OK : status;
+    BN_free(rand);
+    return status;
 }

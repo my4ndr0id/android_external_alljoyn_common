@@ -274,7 +274,10 @@ static void destroyPipe(int rdFd, int wrFd)
 #else
     pipeLock->Lock();
 
-    /* Delete the pipe (permanently) if the number of pipes on the free list is twice as many as on the used list */
+    /*
+     * Delete the pipe (permanently) if the number of pipes on the free list is twice as many as
+     * on the used list.
+     */
     bool closePipe = (freePipeList.size() >= (2 * (usedPipeList.size() - 1)));
 
     /* Look for pipe on usedPipeList */
@@ -296,7 +299,15 @@ static void destroyPipe(int rdFd, int wrFd)
     }
 
     if (foundPipe) {
-        if (closePipe) {
+        if (usedPipeList.size() == 0) {
+            /* Empty the free list if this was the last pipe in use */
+            vector<pair<int, int> >::iterator it = freePipeList.begin();
+            while (it != freePipeList.end()) {
+                close(it->first);
+                close(it->second);
+                it = freePipeList.erase(it);
+            }
+        } else if (closePipe) {
             /* Trim freeList down to 2*used pipe */
             while (freePipeList.size() > (2 * usedPipeList.size())) {
                 pair<int, int> fdPair = freePipeList.back();
@@ -320,13 +331,13 @@ static void destroyPipe(int rdFd, int wrFd)
 #endif
 }
 
-Event::Event() : fd(-1), signalFd(-1), ioFd(-1), eventType(GEN_PURPOSE)
+Event::Event() : fd(-1), signalFd(-1), ioFd(-1), eventType(GEN_PURPOSE), numThreads(0)
 {
     createPipe(&fd, &signalFd);
 }
 
 Event::Event(int ioFd, EventType eventType, bool genPurpose)
-    : fd(-1), signalFd(-1), ioFd(ioFd), eventType(eventType), timestamp(0), period(0)
+    : fd(-1), signalFd(-1), ioFd(ioFd), eventType(eventType), timestamp(0), period(0), numThreads(0)
 {
     if (genPurpose) {
         createPipe(&fd, &signalFd);
@@ -334,7 +345,7 @@ Event::Event(int ioFd, EventType eventType, bool genPurpose)
 }
 
 Event::Event(Event& event, EventType eventType, bool genPurpose)
-    : fd(-1), signalFd(-1), ioFd(event.ioFd), eventType(eventType), timestamp(0), period(0)
+    : fd(-1), signalFd(-1), ioFd(event.ioFd), eventType(eventType), timestamp(0), period(0), numThreads(0)
 {
     if (genPurpose) {
         createPipe(&fd, &signalFd);
@@ -347,7 +358,8 @@ Event::Event(uint32_t timestamp, uint32_t period)
     ioFd(-1),
     eventType(TIMED),
     timestamp(WAIT_FOREVER == timestamp ? WAIT_FOREVER : GetTimestamp() + timestamp),
-    period(period)
+    period(period),
+    numThreads(0)
 {
 }
 
@@ -441,17 +453,3 @@ void Event::ResetTime(uint32_t delay, uint32_t period)
     }
     this->period = period;
 }
-
-void Event::ReplaceIO(Event& event)
-{
-    /* Check event type */
-    if ((IO_READ != eventType) && (IO_WRITE != eventType)) {
-        QCC_LogError(ER_FAIL, ("Attempt to replaceIO on non-io event"));
-        return;
-    }
-
-    /* Replace I/O */
-    ioFd = event.ioFd;
-}
-
-

@@ -32,6 +32,7 @@
 #include <vector>
 
 #include <qcc/atomic.h>
+#include <qcc/Mutex.h>
 
 #include <Status.h>
 
@@ -126,6 +127,23 @@ class Event {
      */
     static QStatus Wait(Event& event, uint32_t maxMs = WAIT_FOREVER);
 
+    /**
+     * Release a lock and then wait on a single event.
+     * The call to Wait will return when the event is signaled.
+     *
+     * @param event   Event to wait on.
+     * @param lock    The lock to release after incrementing numThreads
+     * @param maxMs   Max number of milliseconds to wait or WAIT_FOREVER to wait forever.
+     * @return ER_OK if successful.
+     */
+    static QStatus Wait(Event& event, qcc::Mutex& lock, uint32_t maxMs = WAIT_FOREVER)
+    {
+        event.IncrementNumThreads();
+        lock.Unlock();
+        QStatus status = Wait(event, maxMs);
+        event.DecrementNumThreads();
+        return status;
+    }
 
     /**
      * Set the event to the signaled state.
@@ -161,13 +179,6 @@ class Event {
     void ResetTime(uint32_t delay, uint32_t period);
 
     /**
-     * Replace I/O event source with a new one.
-     *
-     * @param event    Dependent event.
-     */
-    void ReplaceIO(Event& event);
-
-    /**
      * Get the underlying file descriptor for I/O backed events.
      * This returns -1 if there is no underlying file descriptor.
      *
@@ -200,7 +211,7 @@ class Event {
     EventType eventType;    /**< Type of event */
     uint32_t timestamp;     /**< time for next triggering of TIMED Event */
     uint32_t period;        /**< Number of milliseconds between periodic timed events */
-    int ioFd;               /**< Socket descriptor or -1 if not socket based IO */
+    qcc::SocketFd ioFd;     /**< Socket descriptor or -1 if not socket based IO */
     bool ownsIoHandle;      /**< true iff event owns the lifecycle of it's ioHandle member */
     int32_t numThreads;     /**< Number of threads currently waiting on this event */
 
@@ -231,7 +242,6 @@ class Event {
      * Decrement the count of threads blocked on this event
      */
     void DecrementNumThreads() { DecrementAndFetch(&numThreads); }
-
 
 };
 

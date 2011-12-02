@@ -1,11 +1,11 @@
 /**
  * @file
  *
- * This file implements qcc::Stream.
+ * OS specific utility functions
  */
 
 /******************************************************************************
- * Copyright 2009-2011, Qualcomm Innovation Center, Inc.
+ * Copyright 2011, Qualcomm Innovation Center, Inc.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -22,38 +22,19 @@
 
 #include <qcc/platform.h>
 
-#include <qcc/String.h>
-#include <qcc/Stream.h>
+#include <windows.h>
+#include <bcrypt.h>
 
-#include <Status.h>
+#include <qcc/Crypto.h>
+#include <qcc/Util.h>
 
-#define QCC_MODULE "STREAM"
+#define QCC_MODULE  "CRYPTO"
 
-using namespace std;
-using namespace qcc;
-
-Source Source::nullSource;
-
-QStatus Source::GetLine(qcc::String& outStr, uint32_t timeout)
+QStatus qcc::Crypto_GetRandomBytes(uint8_t* data, size_t len)
 {
-    QStatus status;
-    uint8_t c;
-    size_t actual;
-    bool hasBytes = false;
-
-    while (true) {
-        status = PullBytes(&c, 1, actual, timeout);
-        if (ER_OK != status) {
-            break;
-        }
-        hasBytes = true;
-        if ('\r' == c) {
-            continue;
-        } else if ('\n' == c) {
-            break;
-        } else {
-            outStr.push_back(c);
-        }
+    if (BCryptGenRandom(NULL, data, len, BCRYPT_USE_SYSTEM_PREFERRED_RNG) <= 0) {
+        return ER_OK;
+    } else {
+        return ER_FAIL;
     }
-    return ((status == ER_NONE) && hasBytes) ? ER_OK : status;
 }

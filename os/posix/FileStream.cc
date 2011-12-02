@@ -25,7 +25,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <unistd.h>
+#include <sys/file.h>
 
 #include <qcc/Debug.h>
 #include <qcc/FileStream.h>
@@ -37,8 +37,17 @@ using namespace qcc;
 /** @internal */
 #define QCC_MODULE  "STREAM"
 
-FileSource::FileSource(qcc::String fileName)
-    : fd(open(fileName.c_str(), O_RDONLY)), event(fd, Event::IO_READ, false), ownsFd(true)
+QStatus qcc::DeleteFile(qcc::String fileName)
+{
+    if (unlink(fileName.c_str())) {
+        return ER_OS_ERROR;
+    } else {
+        return ER_OK;
+    }
+}
+
+FileSource::FileSource(qcc::String fileName) :
+    fd(open(fileName.c_str(), O_RDONLY)), event(new Event(fd, Event::IO_READ, false)), ownsFd(true), locked(false)
 {
 #ifndef NDEBUG
     if (0 > fd) {
@@ -47,9 +56,27 @@ FileSource::FileSource(qcc::String fileName)
 #endif
 }
 
-FileSource::FileSource()
-    : fd(0), event(fd, Event::IO_READ, false), ownsFd(false)
+FileSource::FileSource() :
+    fd(0), event(new Event(fd, Event::IO_READ, false)), ownsFd(false), locked(false)
 {
+}
+
+FileSource::FileSource(const FileSource& other) :
+    fd(dup(other.fd)), event(new Event(fd, Event::IO_READ, false)), ownsFd(true), locked(other.locked)
+{
+}
+
+FileSource FileSource::operator=(const FileSource& other)
+{
+    if (ownsFd && (0 <= fd)) {
+        close(fd);
+    }
+    fd = dup(other.fd);
+    delete event;
+    event = new Event(fd, Event::IO_READ, false);
+    ownsFd = true;
+    locked = other.locked;
+    return *this;
 }
 
 FileSource::~FileSource()
@@ -57,6 +84,7 @@ FileSource::~FileSource()
     if (ownsFd && (0 <= fd)) {
         close(fd);
     }
+    delete event;
 }
 
 QStatus FileSource::PullBytes(void* buf, size_t reqBytes, size_t& actualBytes, uint32_t timeout)
@@ -80,9 +108,31 @@ QStatus FileSource::PullBytes(void* buf, size_t reqBytes, size_t& actualBytes, u
     }
 }
 
+bool FileSource::Lock(bool block)
+{
+    if (fd < 0) {
+        return false;
+    }
+    if (!locked) {
+        int ret = flock(fd, block ? LOCK_EX : LOCK_EX | LOCK_NB);
+        if (ret && errno != EWOULDBLOCK) {
+            QCC_LogError(ER_OS_ERROR, ("Lock fd %d failed with '%s'", fd, strerror(errno)));
+        }
+        locked = (ret == 0);
+    }
+    return locked;
+}
+
+void FileSource::Unlock()
+{
+    if (fd >= 0 && locked) {
+        flock(fd, LOCK_UN);
+        locked = false;
+    }
+}
 
 FileSink::FileSink(qcc::String fileName, Mode mode)
-    : fd(-1), event(fd, Event::IO_WRITE, false), ownsFd(true)
+    : fd(-1), event(new Event(fd, Event::IO_WRITE, false)), ownsFd(true)
 {
 #ifdef QCC_OS_ANDROID
     /* Android uses per-user groups so user and group permissions are the same */
@@ -135,15 +185,33 @@ FileSink::FileSink(qcc::String fileName, Mode mode)
     }
 
     /* Create and open the file */
-    fd = open(fileName.c_str(), O_CREAT | O_WRONLY, fileMode);
+    fd = open(fileName.c_str(), O_CREAT | O_WRONLY | O_TRUNC, fileMode);
     if (0 > fd) {
         QCC_LogError(ER_OS_ERROR, ("open(%s) failed with '%s'", fileName.c_str(), strerror(errno)));
     }
 }
 
 FileSink::FileSink()
-    : fd(1), event(fd, Event::IO_WRITE, false), ownsFd(false)
+    : fd(1), event(new Event(fd, Event::IO_WRITE, false)), ownsFd(false), locked(false)
 {
+}
+
+FileSink::FileSink(const FileSink& other) :
+    fd(dup(other.fd)), event(new Event(fd, Event::IO_WRITE, false)), ownsFd(true), locked(other.locked)
+{
+}
+
+FileSink FileSink::operator=(const FileSink& other)
+{
+    if (ownsFd && (0 <= fd)) {
+        close(fd);
+    }
+    fd = dup(other.fd);
+    delete event;
+    event = new Event(fd, Event::IO_WRITE, false);
+    ownsFd = true;
+    locked = other.locked;
+    return *this;
 }
 
 FileSink::~FileSink() {
@@ -168,4 +236,25 @@ QStatus FileSink::PushBytes(const void* buf, size_t numBytes, size_t& numSent)
     }
 }
 
+bool FileSink::Lock(bool block)
+{
+    if (fd < 0) {
+        return false;
+    }
+    if (!locked) {
+        int ret = flock(fd, block ? LOCK_EX : LOCK_EX | LOCK_NB);
+        if (ret && errno != EWOULDBLOCK) {
+            QCC_LogError(ER_OS_ERROR, ("Lock fd %d failed with '%s'", fd, strerror(errno)));
+        }
+        locked = (ret == 0);
+    }
+    return locked;
+}
 
+void FileSink::Unlock()
+{
+    if (fd >= 0 && locked) {
+        flock(fd, LOCK_UN);
+        locked = false;
+    }
+}

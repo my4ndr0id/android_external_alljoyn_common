@@ -35,6 +35,14 @@ using namespace qcc;
 /** @internal */
 #define QCC_MODULE  "STREAM"
 
+QStatus qcc::DeleteFile(qcc::String fileName)
+{
+    if (DeleteFileA(fileName.c_str())) {
+        return ER_OK;
+    } else {
+        return ER_OS_ERROR;
+    }
+}
 
 static void ReSlash(qcc::String& inStr)
 {
@@ -45,7 +53,20 @@ static void ReSlash(qcc::String& inStr)
     }
 }
 
-FileSource::FileSource(qcc::String fileName) : handle(INVALID_HANDLE_VALUE), event(0, 0), ownsHandle(true)
+static HANDLE DupHandle(HANDLE inHandle)
+{
+    HANDLE outHandle = INVALID_HANDLE_VALUE;
+    DuplicateHandle(GetCurrentProcess(),
+                    inHandle,
+                    GetCurrentProcess(),
+                    &outHandle,
+                    0,
+                    FALSE,
+                    DUPLICATE_SAME_ACCESS);
+    return outHandle;
+}
+
+FileSource::FileSource(qcc::String fileName) : handle(INVALID_HANDLE_VALUE), event(&Event::alwaysSet), ownsHandle(true), locked(false)
 {
     ReSlash(fileName);
     handle = CreateFileA(fileName.c_str(),
@@ -61,13 +82,35 @@ FileSource::FileSource(qcc::String fileName) : handle(INVALID_HANDLE_VALUE), eve
     }
 }
 
-FileSource::FileSource() : handle(INVALID_HANDLE_VALUE), event(0, 0), ownsHandle(false)
+FileSource::FileSource() : handle(INVALID_HANDLE_VALUE), event(&Event::alwaysSet), ownsHandle(false)
 {
     handle = GetStdHandle(STD_INPUT_HANDLE);
 
     if (NULL == handle) {
         QCC_LogError(ER_OS_ERROR, ("GetStdHandle failed (%d)", GetLastError()));
     }
+}
+
+FileSource::FileSource(const FileSource& other) :
+    handle((other.handle == INVALID_HANDLE_VALUE) ? INVALID_HANDLE_VALUE : DupHandle(other.handle)),
+    event(&Event::alwaysSet),
+    ownsHandle(true),
+    locked(other.locked)
+{
+}
+
+FileSource FileSource::operator=(const FileSource& other)
+{
+    if (&other != this) {
+        if (ownsHandle && (INVALID_HANDLE_VALUE != handle)) {
+            CloseHandle(handle);
+        }
+        handle = (other.handle == INVALID_HANDLE_VALUE) ? INVALID_HANDLE_VALUE : DupHandle(other.handle);
+        event = &Event::alwaysSet;
+        ownsHandle = true;
+        locked = other.locked;
+    }
+    return *this;
 }
 
 FileSource::~FileSource()
@@ -91,7 +134,6 @@ QStatus FileSource::PullBytes(void* buf, size_t reqBytes, size_t& actualBytes, u
         actualBytes = readBytes;
         return ((0 < reqBytes) && (0 == readBytes)) ? ER_NONE : ER_OK;
     } else {
-        event.ResetTime(Event::WAIT_FOREVER, 0);
         DWORD error = GetLastError();
         if (ERROR_HANDLE_EOF == error) {
             actualBytes = 0;
@@ -103,13 +145,39 @@ QStatus FileSource::PullBytes(void* buf, size_t reqBytes, size_t& actualBytes, u
     }
 }
 
-FileSink::FileSink(qcc::String fileName, Mode mode) : handle(INVALID_HANDLE_VALUE), event(Event::alwaysSet), ownsHandle(true)
+bool FileSource::Lock(bool block)
+{
+    if (INVALID_HANDLE_VALUE == handle) {
+        return false;
+    }
+    if (locked) {
+        return true;
+    } else {
+        OVERLAPPED ovl = { 0 };
+        locked = LockFileEx(handle,
+                            block ? LOCKFILE_EXCLUSIVE_LOCK : LOCKFILE_FAIL_IMMEDIATELY,
+                            0, 0, 0xFFFFFFFF, &ovl);
+        return locked;
+
+    }
+}
+
+void FileSource::Unlock()
+{
+    if (handle != INVALID_HANDLE_VALUE && locked) {
+        OVERLAPPED ovl = { 0 };
+        UnlockFileEx(handle, 0, 0, 0xFFFFFFFF, &ovl);
+        locked = false;
+    }
+}
+
+FileSink::FileSink(qcc::String fileName, Mode mode) : handle(INVALID_HANDLE_VALUE), event(&Event::alwaysSet), ownsHandle(true), locked(false)
 {
     ReSlash(fileName);
 
     DWORD attributes;
     switch (mode) {
-    case PRIVATE:
+    case PRIVATE :
         attributes = FILE_ATTRIBUTE_HIDDEN;
         break;
 
@@ -132,6 +200,12 @@ FileSink::FileSink(qcc::String fileName, Mode mode) : handle(INVALID_HANDLE_VALU
 
     /* Create the intermediate directories */
     size_t begin = skip;
+
+    /* Skip creating c:\ */
+    if (fileName[begin + 1] == ':') {
+        begin += 2;
+    }
+
     for (size_t end = fileName.find('\\', begin); end != String::npos; end = fileName.find('\\', begin)) {
 
         /* Skip consecutive slashes */
@@ -161,7 +235,7 @@ FileSink::FileSink(qcc::String fileName, Mode mode) : handle(INVALID_HANDLE_VALU
                          GENERIC_WRITE,
                          FILE_SHARE_READ,
                          NULL,
-                         OPEN_ALWAYS,
+                         CREATE_ALWAYS,
                          attributes,
                          INVALID_HANDLE_VALUE);
 
@@ -170,13 +244,35 @@ FileSink::FileSink(qcc::String fileName, Mode mode) : handle(INVALID_HANDLE_VALU
     }
 }
 
-FileSink::FileSink() : handle(INVALID_HANDLE_VALUE), event(Event::alwaysSet), ownsHandle(false)
+FileSink::FileSink() : handle(INVALID_HANDLE_VALUE), event(&Event::alwaysSet), ownsHandle(false), locked(false)
 {
     handle = GetStdHandle(STD_OUTPUT_HANDLE);
 
     if (NULL == handle) {
         QCC_LogError(ER_OS_ERROR, ("GetStdHandle failed (%d)", GetLastError()));
     }
+}
+
+FileSink::FileSink(const FileSink& other) :
+    handle((other.handle == INVALID_HANDLE_VALUE) ? INVALID_HANDLE_VALUE : DupHandle(other.handle)),
+    event(&Event::alwaysSet),
+    ownsHandle(true),
+    locked(other.locked)
+{
+}
+
+FileSink FileSink::operator=(const FileSink& other)
+{
+    if (&other != this) {
+        if (ownsHandle && (INVALID_HANDLE_VALUE != handle)) {
+            CloseHandle(handle);
+        }
+        handle = (other.handle == INVALID_HANDLE_VALUE) ? INVALID_HANDLE_VALUE : DupHandle(other.handle);
+        event = &Event::alwaysSet;
+        ownsHandle = true;
+        locked = other.locked;
+    }
+    return *this;
 }
 
 FileSink::~FileSink() {
@@ -200,11 +296,33 @@ QStatus FileSink::PushBytes(const void* buf, size_t numBytes, size_t& numSent)
         numSent = writeBytes;
         return ER_OK;
     } else {
-        event.ResetTime(Event::WAIT_FOREVER, 0);
         QCC_LogError(ER_FAIL, ("WriteFile failed. error=%d", GetLastError()));
         return ER_FAIL;
     }
 }
 
+bool FileSink::Lock(bool block)
+{
+    if (INVALID_HANDLE_VALUE == handle) {
+        return false;
+    }
+    if (locked) {
+        return true;
+    } else {
+        OVERLAPPED ovl = { 0 };
+        locked = LockFileEx(handle,
+                            block ? LOCKFILE_EXCLUSIVE_LOCK : LOCKFILE_FAIL_IMMEDIATELY,
+                            0, 0, 0xFFFFFFFF, &ovl);
+        return locked;
 
+    }
+}
 
+void FileSink::Unlock()
+{
+    if (handle != INVALID_HANDLE_VALUE && locked) {
+        OVERLAPPED ovl = { 0 };
+        UnlockFileEx(handle, 0, 0, 0xFFFFFFFF, &ovl);
+        locked = false;
+    }
+}

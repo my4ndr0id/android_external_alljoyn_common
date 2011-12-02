@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <arpa/inet.h>
+#include <netinet/tcp.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -33,6 +34,9 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
+#if defined(QCC_OS_DARWIN)
+#include <sys/ucred.h>
+#endif
 
 #include <qcc/IPAddress.h>
 #include <qcc/ScatterGatherList.h>
@@ -47,8 +51,17 @@ namespace qcc {
 
 const SocketFd INVALID_SOCKET_FD = -1;
 
-static void MakeSockAddr(const char* path,
-                         struct sockaddr_storage* addrBuf, socklen_t& addrSize)
+#if defined(QCC_OS_DARWIN)
+#define MSG_NOSIGNAL 0
+static void DisableSigPipe(SocketFd socket)
+{
+    int disableSigPipe = 1;
+    setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &disableSigPipe, sizeof(disableSigPipe));
+}
+#endif
+
+static QStatus MakeSockAddr(const char* path,
+                            struct sockaddr_storage* addrBuf, socklen_t& addrSize)
 {
     size_t pathLen = strlen(path);
     struct sockaddr_un sa;
@@ -58,20 +71,26 @@ static void MakeSockAddr(const char* path,
     memcpy(sa.sun_path, path, (std::min)(pathLen, sizeof(sa.sun_path) - 1));
     /*
      * We use an @ in the first character position to indicate an abstract socket. Abstract sockets
-     * start with a NUL character.
+     * start with a NUL character on Linux.
      */
     if (sa.sun_path[0] == '@') {
+#if defined(QCC_OS_LINUX) || defined (QCC_OS_ANDROID)
         sa.sun_path[0] = 0;
         addrSize = offsetof(struct sockaddr_un, sun_path) + pathLen;
+#else /* Non-linux platforms */
+        QCC_LogError(ER_NOT_IMPLEMENTED, ("Abstract socket paths are not supported"));
+        return ER_NOT_IMPLEMENTED;
+#endif
     } else {
         addrSize = sizeof(sa);
     }
     memcpy(addrBuf, &sa, sizeof(sa));
+    return ER_OK;
 }
 
 
-static void MakeSockAddr(const IPAddress& addr, uint16_t port,
-                         struct sockaddr_storage* addrBuf, socklen_t addrSize)
+static QStatus MakeSockAddr(const IPAddress& addr, uint16_t port,
+                            struct sockaddr_storage* addrBuf, socklen_t& addrSize)
 {
     if (addr.IsIPv4()) {
         struct sockaddr_in sa;
@@ -80,6 +99,7 @@ static void MakeSockAddr(const IPAddress& addr, uint16_t port,
         sa.sin_family = AF_INET;
         sa.sin_port = htons(port);
         sa.sin_addr.s_addr = addr.GetIPv4AddressNetOrder();
+        addrSize = sizeof(sa);
         memcpy(addrBuf, &sa, sizeof(sa));
     } else {
         struct sockaddr_in6 sa;
@@ -90,8 +110,10 @@ static void MakeSockAddr(const IPAddress& addr, uint16_t port,
         sa.sin6_flowinfo = 0;  // TODO: What should go here???
         addr.RenderIPv6Binary(sa.sin6_addr.s6_addr, sizeof(sa.sin6_addr.s6_addr));
         sa.sin6_scope_id = 0;  // TODO: What should go here???
+        addrSize = sizeof(sa);
         memcpy(addrBuf, &sa, sizeof(sa));
     }
+    return ER_OK;
 }
 
 
@@ -127,7 +149,15 @@ static QStatus GetSockAddr(const sockaddr_storage* addrBuf, socklen_t addrSize,
     return status;
 }
 
+uint32_t GetLastError()
+{
+    return errno;
+}
 
+qcc::String GetLastErrorString()
+{
+    return strerror(errno);
+}
 
 QStatus Socket(AddressFamily addrFamily, SocketType type, SocketFd& sockfd)
 {
@@ -142,6 +172,9 @@ QStatus Socket(AddressFamily addrFamily, SocketType type, SocketFd& sockfd)
         QCC_LogError(status, ("Opening socket: %d - %s", errno, strerror(errno)));
     } else {
         sockfd = static_cast<SocketFd>(ret);
+#if defined(QCC_OS_DARWIN)
+        DisableSigPipe(sockfd);
+#endif
     }
     return status;
 }
@@ -157,7 +190,11 @@ QStatus Connect(SocketFd sockfd, const IPAddress& remoteAddr, uint16_t remotePor
     QCC_DbgTrace(("Connect(sockfd = %d, remoteAddr = %s, remotePort = %hu)",
                   sockfd, remoteAddr.ToString().c_str(), remotePort));
 
-    MakeSockAddr(remoteAddr, remotePort, &addr, addrLen);
+    status = MakeSockAddr(remoteAddr, remotePort, &addr, addrLen);
+    if (status != ER_OK) {
+        return status;
+    }
+
     ret = connect(static_cast<int>(sockfd), reinterpret_cast<struct sockaddr*>(&addr), addrLen);
     if (ret == -1) {
         if ((errno == EINPROGRESS) || (errno == EALREADY)) {
@@ -196,7 +233,11 @@ QStatus Connect(SocketFd sockfd, const char* pathName)
 
     QCC_DbgTrace(("Connect(sockfd = %u, path = %s)", sockfd, pathName));
 
-    MakeSockAddr(pathName, &addr, addrLen);
+    status = MakeSockAddr(pathName, &addr, addrLen);
+    if (status != ER_OK) {
+        return status;
+    }
+
     ret = connect(static_cast<int>(sockfd), reinterpret_cast<struct sockaddr*>(&addr), addrLen);
     if (ret == -1) {
         status = ER_OS_ERROR;
@@ -228,7 +269,11 @@ QStatus Bind(SocketFd sockfd, const IPAddress& localAddr, uint16_t localPort)
     QCC_DbgTrace(("Bind(sockfd = %d, localAddr = %s, localPort = %hu)",
                   sockfd, localAddr.ToString().c_str(), localPort));
 
-    MakeSockAddr(localAddr, localPort, &addr, addrLen);
+    status = MakeSockAddr(localAddr, localPort, &addr, addrLen);
+    if (status != ER_OK) {
+        return status;
+    }
+
     ret = bind(static_cast<int>(sockfd), reinterpret_cast<struct sockaddr*>(&addr), addrLen);
     if (ret != 0) {
         status = (errno == EADDRNOTAVAIL ? ER_SOCKET_BIND_ERROR : ER_OS_ERROR);
@@ -248,7 +293,11 @@ QStatus Bind(SocketFd sockfd, const char* pathName)
 
     QCC_DbgTrace(("Bind(sockfd = %d, pathName = %s)", sockfd, pathName));
 
-    MakeSockAddr(pathName, &addr, addrLen);
+    status = MakeSockAddr(pathName, &addr, addrLen);
+    if (status != ER_OK) {
+        return status;
+    }
+
     ret = bind(static_cast<int>(sockfd), reinterpret_cast<struct sockaddr*>(&addr), addrLen);
     if (ret != 0) {
         status = (errno == EADDRNOTAVAIL ? ER_SOCKET_BIND_ERROR : ER_OS_ERROR);
@@ -309,6 +358,9 @@ QStatus Accept(SocketFd sockfd, IPAddress& remoteAddr, uint16_t& remotePort, Soc
             remotePort = 0;
         }
         newSockfd = static_cast<SocketFd>(ret);
+#if defined(QCC_OS_DARWIN)
+        DisableSigPipe(newSockfd);
+#endif
         QCC_DbgPrintf(("New socket FD: %d", newSockfd));
 
         int flags = fcntl(newSockfd, F_GETFL, 0);
@@ -403,7 +455,7 @@ QStatus GetLocalAddress(SocketFd sockfd, IPAddress& addr, uint16_t& port)
 }
 
 
-QStatus Send(SocketFd sockfd, const void* buf, size_t len, size_t& sent)
+QStatus Send(SocketFd sockfd, const void* buf, size_t len, size_t& sent, uint32_t timeout)
 {
     QStatus status = ER_OK;
     ssize_t ret;
@@ -418,19 +470,37 @@ QStatus Send(SocketFd sockfd, const void* buf, size_t len, size_t& sent)
         ret = send(static_cast<int>(sockfd), buf, len, MSG_NOSIGNAL);
         if (ret == -1) {
             if (errno == EAGAIN) {
-                fd_set set;
-                FD_ZERO(&set);
-                FD_SET(sockfd, &set);
-                ret = select(sockfd + 1, NULL, &set, NULL, NULL);
+                int stopFd = Thread::GetThread()->GetStopEvent().GetFD();
+                fd_set wrSet, rdSet, exSet;
+                FD_ZERO(&wrSet);
+                FD_SET(sockfd, &wrSet);
+                FD_ZERO(&rdSet);
+                FD_SET(stopFd, &rdSet);
+                FD_ZERO(&exSet);
+                FD_SET(sockfd, &exSet);
+                struct timeval tv;
+
+                if (timeout) {
+                    tv.tv_sec = timeout / 1000;
+                    tv.tv_usec = 1000 * (timeout % 1000);
+                }
+
+                ret = select(std::max(sockfd, stopFd) + 1, &rdSet, &wrSet, &exSet, timeout ? &tv : NULL);
                 if (ret == -1) {
                     status = ER_OS_ERROR;
-                    QCC_LogError(status, ("Send (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
+                    QCC_DbgHLPrintf(("Send (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
+                    break;
+                } else if (FD_ISSET(stopFd, &rdSet) || FD_ISSET(sockfd, &exSet)) {
+                    status = ER_ALERTED_THREAD;
+                    break;
+                } else if (ret == 0) {
+                    status = ER_TIMEOUT;
                     break;
                 }
                 continue;
             }
             status = ER_OS_ERROR;
-            QCC_LogError(status, ("Send (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
+            QCC_DbgHLPrintf(("Send (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
         } else {
             sent = static_cast<size_t>(ret);
         }
@@ -454,7 +524,11 @@ QStatus SendTo(SocketFd sockfd, IPAddress& remoteAddr, uint16_t remotePort,
 
     QCC_DbgLocalData(buf, len);
 
-    MakeSockAddr(remoteAddr, remotePort, &addr, addrLen);
+    status = MakeSockAddr(remoteAddr, remotePort, &addr, addrLen);
+    if (status != ER_OK) {
+        return status;
+    }
+
     ret = sendto(static_cast<int>(sockfd), buf, len, MSG_NOSIGNAL,
                  reinterpret_cast<struct sockaddr*>(&addr), addrLen);
     if (ret == -1) {
@@ -524,7 +598,11 @@ QStatus SendToSG(SocketFd sockfd, IPAddress& remoteAddr, uint16_t remotePort,
                   sockfd, remoteAddr.ToString().c_str(), remotePort,
                   sg.Size(), sg.DataSize(), sg.MaxDataSize()));
 
-    MakeSockAddr(remoteAddr, remotePort, &addr, addrLen);
+    QStatus status = MakeSockAddr(remoteAddr, remotePort, &addr, addrLen);
+    if (status != ER_OK) {
+        return status;
+    }
+
     return SendSGCommon(sockfd, &addr, addrLen, sg, sent);
 }
 
@@ -545,7 +623,7 @@ QStatus Recv(SocketFd sockfd, void* buf, size_t len, size_t& received)
 
     if (ret == -1) {
         status = ER_OS_ERROR;
-        QCC_LogError(status, ("Recv (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
+        QCC_DbgHLPrintf(("Recv (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
     } else {
         received = static_cast<size_t>(ret);
     }
@@ -573,8 +651,7 @@ QStatus RecvFrom(SocketFd sockfd, IPAddress& remoteAddr, uint16_t& remotePort,
                    reinterpret_cast<struct sockaddr*>(&addr), &addrLen);
     if (ret == -1) {
         status = ER_OS_ERROR;
-        QCC_LogError(status, ("RecvFrom (sockfd = %u): %d - %s",
-                              sockfd, errno, strerror(errno)));
+        QCC_DbgHLPrintf(("RecvFrom (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
     } else {
         received = static_cast<size_t>(ret);
         GetSockAddr(&addr, addrLen, remoteAddr, remotePort);
@@ -617,7 +694,7 @@ static QStatus RecvSGCommon(SocketFd sockfd, struct sockaddr_storage* addr, sock
     ret = recvmsg(static_cast<int>(sockfd), &msg, 0);
     if (ret == -1) {
         status = ER_OS_ERROR;
-        QCC_LogError(status, ("RecvSGCommon (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
+        QCC_DbgHLPrintf(("RecvSGCommon (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
     } else {
         received = static_cast<size_t>(ret);
         sg.SetDataSize(static_cast<size_t>(ret));
@@ -699,7 +776,7 @@ QStatus RecvWithFds(SocketFd sockfd, void* buf, size_t len, size_t& received, So
             status = ER_WOULDBLOCK;
         } else {
             status = ER_OS_ERROR;
-            QCC_LogError(status, ("Receiving file descriptors: %d - %s", errno, strerror(errno)));
+            QCC_DbgHLPrintf(("RecvWithFds (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
         }
     } else {
         struct cmsghdr* cmsg;
@@ -761,7 +838,7 @@ QStatus SendWithFds(SocketFd sockfd, const void* buf, size_t len, size_t& sent, 
     ssize_t ret = sendmsg(sockfd, &msg, 0);
     if (ret == -1) {
         status = ER_OS_ERROR;
-        QCC_LogError(status, ("Sending file descriptor: %d - %s", errno, strerror(errno)));
+        QCC_DbgHLPrintf(("SendWithFds (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
     } else {
         sent = static_cast<size_t>(ret);
     }
@@ -791,6 +868,18 @@ QStatus SetBlocking(SocketFd sockfd, bool blocking)
     } else {
         return ER_OK;
     }
+}
+
+QStatus SetNagle(SocketFd sockfd, bool useNagle)
+{
+    QStatus status = ER_OK;
+    int arg = useNagle ? 1 : -0;
+    int r = setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void*)&arg, sizeof(int));
+    if (r != 0) {
+        status = ER_OS_ERROR;
+        QCC_LogError(status, ("Setting TCP_NODELAY failed: (%d) %s", errno, strerror(errno)));
+    }
+    return status;
 }
 
 }  /* namespace */

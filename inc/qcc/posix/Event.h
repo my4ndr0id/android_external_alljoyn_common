@@ -30,6 +30,7 @@
 #include <vector>
 
 #include <qcc/atomic.h>
+#include <qcc/Mutex.h>
 
 #include <Status.h>
 
@@ -120,6 +121,23 @@ class Event {
      */
     static QStatus Wait(Event& event, uint32_t maxMs = WAIT_FOREVER);
 
+    /**
+     * Release a lock and then wait on a single event.
+     * The call to Wait will return when the event is signaled.
+     *
+     * @param event   Event to wait on.
+     * @param lock    The lock to release after incrementing numThreads
+     * @param maxMs   Max number of milliseconds to wait or WAIT_FOREVER to wait forever.
+     * @return ER_OK if successful.
+     */
+    static QStatus Wait(Event& event, qcc::Mutex& lock, uint32_t maxMs = WAIT_FOREVER)
+    {
+        event.IncrementNumThreads();
+        lock.Unlock();
+        QStatus status = Wait(event, maxMs);
+        event.DecrementNumThreads();
+        return status;
+    }
 
     /**
      * Set the event to the signaled state.
@@ -153,13 +171,6 @@ class Event {
      * @param period   Number of milliseconds between auto-set events or 0 to indicate no repeat.
      */
     void ResetTime(uint32_t delay, uint32_t period);
-
-    /**
-     * Replace I/O event source with a new one.
-     *
-     * @param event    Dependent event.
-     */
-    void ReplaceIO(Event& event);
 
     /**
      * Get the underlying file descriptor for general purpose and I/O events.

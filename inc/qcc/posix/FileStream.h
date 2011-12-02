@@ -26,6 +26,7 @@
 #include <qcc/platform.h>
 
 #include <cstdio>
+#include <unistd.h>
 #include <errno.h>
 #include <string>
 
@@ -34,6 +35,15 @@
 #include <Status.h>
 
 namespace qcc {
+
+/**
+ * Platform abstraction for deleting a file
+ *
+ * @param fileName  The name of the file to delete
+ *
+ * @eturn ER_OK if the file was deleted or an error status otherwise.
+ */
+QStatus DeleteFile(qcc::String fileName);
 
 /**
  * FileSource is an implementation of Source used for reading from files.
@@ -53,6 +63,21 @@ class FileSource : public Source {
      */
     FileSource();
 
+    /**
+     * Copy constructor.
+     *
+     * @param other   FileSource to copy from.
+     */
+    FileSource(const FileSource& other);
+
+    /**
+     * Assignment.
+     *
+     * @param other FileSource to copy from.
+     * @return This FileSource.
+     */
+    FileSource operator=(const FileSource& other);
+
     /** Destructor */
     virtual ~FileSource();
 
@@ -64,7 +89,7 @@ class FileSource : public Source {
      * @param reqBytes     Number of bytes requested to be pulled from source.
      * @param actualBytes  Actual number of bytes retrieved from source.
      * @param timeout      Timeout in milliseconds.
-     * @return   OI_OK if successful. ER_NONE if source is exhausted. Otherwise an error.
+     * @return   ER_OK if successful. ER_NONE if source is exhausted. Otherwise an error.
      */
     QStatus PullBytes(void* buf, size_t reqBytes, size_t& actualBytes, uint32_t timeout = Event::WAIT_FOREVER);
 
@@ -73,7 +98,7 @@ class FileSource : public Source {
      *
      * @return Event that is signaled when data is available.
      */
-    Event& GetSourceEvent() { return event; }
+    Event& GetSourceEvent() { return *event; }
 
     /**
      * Check validity of FILE.
@@ -82,10 +107,26 @@ class FileSource : public Source {
      */
     bool IsValid() { return 0 <= fd; }
 
+    /**
+     * Lock the underlying file for exclusive access
+     *
+     * @param block  If block is true the function will block until file access if permitted.
+     *
+     * @return Returns true if the file was locked, false if the file was not locked or if the file
+     *         was not valid, i.e. if IsValid() would returnf false;
+     */
+    bool Lock(bool block = false);
+
+    /**
+     * Unlock the file if previously locked
+     */
+    void Unlock();
+
   private:
     int fd;        /**< File descriptor */
-    Event event;   /**< I/O event */
+    Event* event;  /**< I/O event */
     bool ownsFd;   /**< true if sink is responsible for closing fd */
+    bool locked;   /**< true if the sink has been locked for exclusive access */
 };
 
 
@@ -117,6 +158,21 @@ class FileSink : public Sink {
      */
     FileSink();
 
+    /**
+     * Copy constructor.
+     *
+     * @param other   FileSink to copy from.
+     */
+    FileSink(const FileSink& other);
+
+    /**
+     * Assignment.
+     *
+     * @param other FileSink to copy from.
+     * @return This FileSink.
+     */
+    FileSink operator=(const FileSink& other);
+
     /** FileSink Destructor */
     virtual ~FileSink();
 
@@ -135,7 +191,7 @@ class FileSink : public Sink {
      *
      * @return Event that is signaled when sink can accept more bytes.
      */
-    Event& GetSinkEvent() { return event; }
+    Event& GetSinkEvent() { return *event; }
 
     /**
      * Check validity of FILE.
@@ -144,11 +200,27 @@ class FileSink : public Sink {
      */
     bool IsValid() { return 0 <= fd; }
 
+    /**
+     * Lock the underlying file for exclusive access
+     *
+     * @param block  If block is true the function will block until file access if permitted.
+     *
+     * @return Returns true if the file was locked, false if the file was not locked or if the file
+     *         was not valid, i.e. if IsValid() would returnf false;
+     */
+    bool Lock(bool block = false);
+
+    /**
+     * Unlock the file if previously locked
+     */
+    void Unlock();
+
   private:
 
     int fd;        /**< File descriptor */
-    Event event;   /**< I/O event */
+    Event* event;  /**< I/O event */
     bool ownsFd;   /**< true if sink is responsible for closing fd */
+    bool locked;   /**< true if the sink has been locked for exclusive access */
 };
 
 }   /* namespace */
