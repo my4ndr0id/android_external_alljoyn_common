@@ -31,6 +31,9 @@
 
 #include <Status.h>
 
+/** @internal */
+#define QCC_MODULE "MUTEX"
+
 using namespace qcc;
 
 void Mutex::Init()
@@ -107,13 +110,15 @@ QStatus Mutex::Lock(const char* file, uint32_t line)
     if (TryLock()) {
         status = ER_OK;
     } else {
-        Thread::GetThread()->lockTrace.Waiting(this, file, line);
+        //Thread::GetThread()->lockTrace.Waiting(this, file, line);
         status = Lock();
-#define QCC_MODULE "LOCK_TRACE"
-        QCC_DbgPrintf(("Lock Acquired"));
-#undef QCC_MODULE
+        QCC_DbgPrintf(("Lock Acquired %s:%d", file, line));
     }
-    Thread::GetThread()->lockTrace.Acquired(this, file, line);
+    if (status == ER_OK) {
+        //Thread::GetThread()->lockTrace.Acquired(this, file, line);
+    } else {
+        QCC_LogError(status, ("Mutex::Lock %s:%d failed", file, line));
+    }
     return status;
 #endif
 }
@@ -143,7 +148,7 @@ QStatus Mutex::Unlock(const char* file, uint32_t line)
     if (!isInitialized) {
         return ER_INIT_FAILED;
     }
-    Thread::GetThread()->lockTrace.Releasing(this, file, line);
+    //Thread::GetThread()->lockTrace.Releasing(this, file, line);
     return Unlock();
 #endif
 }
