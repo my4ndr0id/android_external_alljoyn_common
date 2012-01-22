@@ -81,7 +81,8 @@ class StdoutLock {
     Mutex* Get(void)
     {
         if (m_mutex == NULL && m_destructed == false) {
-            m_mutex = new Mutex;
+            /* Be sure to use the non-debug-printing version of Mutex to avoid infinite recursion */
+            m_mutex = new Mutex();
         }
         return m_mutex;
     }
@@ -103,8 +104,8 @@ int QCC_SyncPrintf(const char* fmt, ...)
     va_start(ap, fmt);
     if (stdoutLock.Lock()) {
         ret = vprintf(fmt, ap);
+        stdoutLock.Unlock();
     }
-    stdoutLock.Unlock();
     va_end(ap);
 
     return ret;
@@ -115,16 +116,12 @@ static void WriteMsg(DbgMsgType type, const char* module, const char* msg, void*
 {
     bool ret = false;
     FILE* file = reinterpret_cast<FILE*>(context);
-    if ((file == stdout) || (file == stderr)) {
-        fflush(stdout);     // Helps make output cleaner on Windows.
-        ret = stdoutLock.Lock();
-    }
+
+    fflush(stdout);     // Helps make output cleaner on Windows.
+    ret = stdoutLock.Lock();
 
     if (ret) {
         fputs(msg, file);
-    }
-
-    if ((file == stdout) || (file == stderr)) {
         stdoutLock.Unlock();
     }
 }
@@ -359,27 +356,20 @@ class DebugContext {
   private:
     char msg[2000];  // Just allocate a buffer that's 'big enough'.
     size_t msgLen;
-    static int32_t ctxCnt;
-    bool suppress;
 
   public:
     DebugContext(void) : msgLen(0)
     {
         msg[0] = '\0';
-        suppress = IncrementAndFetch(&ctxCnt) > 1;
     }
 
     ~DebugContext(void)
     {
-        DecrementAndFetch(&ctxCnt);
     }
 
     void Process(DbgMsgType type, const char* module, const char* filename, int lineno);
     void Vprintf(const char* fmt, va_list ap);
-    bool IsSuppressed() const { return suppress; }
 };
-
-int32_t DebugContext::ctxCnt = 0;
 
 void DebugContext::Process(DbgMsgType type, const char* module, const char* filename, int lineno)
 {
@@ -403,10 +393,13 @@ void DebugContext::Vprintf(const char* fmt, va_list ap)
 {
     int mlen;
 
-    mlen = vsnprintf(msg + msgLen, sizeof(msg) - msgLen, fmt, ap);
+    if (stdoutLock.Lock()) {
+        mlen = vsnprintf(msg + msgLen, sizeof(msg) - msgLen, fmt, ap);
+        stdoutLock.Unlock();
 
-    if ((mlen > 0) && ((mlen + msgLen) <= sizeof(msg))) {
-        msgLen += mlen;
+        if ((mlen > 0) && ((mlen + msgLen) <= sizeof(msg))) {
+            msgLen += mlen;
+        }
     }
 }
 
@@ -420,13 +413,11 @@ void QCC_InitializeDebugControl(void)
 void* _QCC_DbgPrintContext(const char* fmt, ...)
 {
     DebugContext* context = new DebugContext();
-    if (!context->IsSuppressed()) {
-        va_list ap;
+    va_list ap;
 
-        va_start(ap, fmt);
-        context->Vprintf(fmt, ap);
-        va_end(ap);
-    }
+    va_start(ap, fmt);
+    context->Vprintf(fmt, ap);
+    va_end(ap);
     return context;
 }
 
@@ -434,22 +425,18 @@ void* _QCC_DbgPrintContext(const char* fmt, ...)
 void _QCC_DbgPrintAppend(void* ctx, const char* fmt, ...)
 {
     DebugContext* context = reinterpret_cast<DebugContext*>(ctx);
-    if (!context->IsSuppressed()) {
-        va_list ap;
+    va_list ap;
 
-        va_start(ap, fmt);
-        context->Vprintf(fmt, ap);
-        va_end(ap);
-    }
+    va_start(ap, fmt);
+    context->Vprintf(fmt, ap);
+    va_end(ap);
 }
 
 
 void _QCC_DbgPrintProcess(void* ctx, DbgMsgType type, const char* module, const char* filename, int lineno)
 {
     DebugContext* context = reinterpret_cast<DebugContext*>(ctx);
-    if (!context->IsSuppressed()) {
-        context->Process(type, module, filename, lineno);
-    }
+    context->Process(type, module, filename, lineno);
     delete context;
 }
 
@@ -483,74 +470,67 @@ void _QCC_DbgDumpHex(DbgMsgType type, const char* module, const char* filename, 
     if (_QCC_DbgPrintCheck(type, module)) {
         if (data == NULL) {
             DebugContext* context = new DebugContext();
-            if (!context->IsSuppressed()) {
-                _QCC_DbgPrintAppend(context, "<null>");
-                _QCC_DbgPrintProcess(context, type, module, filename, lineno);
-            } else {
-                delete context;
-            }
+            _QCC_DbgPrintAppend(context, "<null>");
+            _QCC_DbgPrintProcess(context, type, module, filename, lineno);
         } else {
             DebugContext ctx;
-            if (!ctx.IsSuppressed()) {
-                DebugControl* control = DebugControl::GetDebugControl();
-                const uint8_t* pos(reinterpret_cast<const uint8_t*>(data));
-                static const size_t LINE_LEN = 16;
-                size_t i;
-                qcc::String oss;
+            DebugControl* control = DebugControl::GetDebugControl();
+            const uint8_t* pos(reinterpret_cast<const uint8_t*>(data));
+            static const size_t LINE_LEN = 16;
+            size_t i;
+            qcc::String oss;
 
-                oss.reserve(strlen(dataStr) + 8 + dataLen * 4 + (((dataLen + 15) / 16) * (40 + strlen(module))));
+            oss.reserve(strlen(dataStr) + 8 + dataLen * 4 + (((dataLen + 15) / 16) * (40 + strlen(module))));
 
-                GenPrefix(oss, type, module, filename, lineno, control->PrintThread());
+            GenPrefix(oss, type, module, filename, lineno, control->PrintThread());
 
-                oss.append(dataStr);
-                oss.push_back('[');
-                oss.append(U32ToString(dataLen, 16, 4, '0'));
-                oss.append("]:\n");
+            oss.append(dataStr);
+            oss.push_back('[');
+            oss.append(U32ToString(dataLen, 16, 4, '0'));
+            oss.append("]:\n");
 
-                while (dataLen > 0) {
-                    size_t dumpLen = (std::min)(dataLen, LINE_LEN);
+            while (dataLen > 0) {
+                size_t dumpLen = (std::min)(dataLen, LINE_LEN);
 
-                    oss.append("         ");
-                    oss.append(Type2Str(type));
-                    oss.push_back(' ');
-                    oss.append(module);
-                    oss.append("    ");
-                    oss.append(U32ToString(pos - reinterpret_cast<const uint8_t*>(data), 16, 4, '0'));
-                    oss.append(" | ");
+                oss.append("         ");
+                oss.append(Type2Str(type));
+                oss.push_back(' ');
+                oss.append(module);
+                oss.append("    ");
+                oss.append(U32ToString(pos - reinterpret_cast<const uint8_t*>(data), 16, 4, '0'));
+                oss.append(" | ");
 
-                    for (i = 0; i < LINE_LEN; ++i) {
-                        if (i == (LINE_LEN / 2)) {
-                            oss.append("- ");
-                        }
-                        if (i < dumpLen) {
-                            oss.append(U32ToString(static_cast<uint32_t>(pos[i]), 16, 2, '0'));
-                            oss.push_back(' ');
-                        } else {
-                            oss.append("   ");
-                        }
+                for (i = 0; i < LINE_LEN; ++i) {
+                    if (i == (LINE_LEN / 2)) {
+                        oss.append("- ");
                     }
-
-                    oss.append(" |  ");
-
-                    for (i = 0; i < LINE_LEN; ++i) {
-                        if (i == (LINE_LEN / 2)) {
-                            oss.append(" - ");
-                        }
-                        if (i < dumpLen) {
-                            oss.push_back(isprint(pos[i]) ? pos[i] : '.');
-                        } else {
-                            oss.push_back(' ');
-                        }
+                    if (i < dumpLen) {
+                        oss.append(U32ToString(static_cast<uint32_t>(pos[i]), 16, 2, '0'));
+                        oss.push_back(' ');
+                    } else {
+                        oss.append("   ");
                     }
-
-                    oss.push_back('\n');
-
-                    pos += dumpLen;
-                    dataLen -= dumpLen;
                 }
 
-                control->WriteDebugMessage(type, module, oss);
+                oss.append(" |  ");
+
+                for (i = 0; i < LINE_LEN; ++i) {
+                    if (i == (LINE_LEN / 2)) {
+                        oss.append(" - ");
+                    }
+                    if (i < dumpLen) {
+                        oss.push_back(isprint(pos[i]) ? pos[i] : '.');
+                    } else {
+                        oss.push_back(' ');
+                    }
+                }
+
+                oss.push_back('\n');
+
+                pos += dumpLen;
+                dataLen -= dumpLen;
             }
+            control->WriteDebugMessage(type, module, oss);
         }
     }
 }
