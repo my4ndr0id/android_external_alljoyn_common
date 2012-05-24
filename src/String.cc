@@ -5,7 +5,7 @@
  */
 
 /******************************************************************************
- * Copyright 2010-2011, Qualcomm Innovation Center, Inc.
+ * Copyright 2010-2012, Qualcomm Innovation Center, Inc.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@
 #include <qcc/platform.h>
 #include <qcc/atomic.h>
 #include <qcc/String.h>
-#include <string.h>
 #include <new>
 
 #if defined(WIN32) || (defined(QCC_OS_DARWIN) && MAC_OS_X_VERSION_MAX_ALLOWED < 1070)

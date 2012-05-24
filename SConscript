@@ -19,6 +19,11 @@ Import('env')
 #default crypto for most platforms is openssl
 env['CRYPTO'] = 'openssl'
 
+if(not(env.has_key('BULLSEYE_BIN'))):
+    print('BULLSEYE_BIN not specified')
+else:
+    env.PrependENVPath('PATH', env.get('BULLSEYE_BIN'))
+
 # Platform specifics for common
 if env['OS_GROUP'] == 'windows':
     vars = Variables()
@@ -42,11 +47,11 @@ if env['OS_GROUP'] == 'windows':
         env.AppendUnique(LIBS = ['libeay32', 'ssleay32'])
         print 'Using OPENSSL crypto libraries'
 elif env['OS'] == 'linux':
-    env.AppendUnique(LIBS =['rt', 'stdc++', 'pthread', 'crypto'])
+    env.AppendUnique(LIBS =['rt', 'stdc++', 'pthread', 'crypto', 'ssl'])
 elif env['OS'] == 'darwin':
     env.AppendUnique(LIBS =['stdc++', 'pthread', 'crypto'])
 elif env['OS'] == 'android':
-    env.AppendUnique(LIBS = ['m', 'c', 'stdc++', 'crypto', 'log', 'gcc'])
+    env.AppendUnique(LIBS = ['m', 'c', 'stdc++', 'crypto', 'log', 'gcc', 'ssl'])
 elif env['OS'] == 'android_donut':
     env.AppendUnique(LIBS = ['m', 'c', 'stdc++', 'crypto', 'log'])
 elif env['OS'] == 'maemo':
@@ -88,6 +93,9 @@ objs = env.Object(srcs)
 # Test programs
 progs = env.SConscript('$OBJDIR/test/SConscript')
 env.Install('$DISTDIR/bin', progs)
+
+# Build unit Tests
+env.SConscript('unit_test/SConscript', variant_dir='$OBJDIR/unittest', duplicate=0)
 
 ret = (hdrs, objs)
 

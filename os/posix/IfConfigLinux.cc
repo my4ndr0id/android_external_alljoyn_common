@@ -116,6 +116,7 @@ static AddressFamily TranslateFamily(uint32_t family)
     if (family == AF_INET6) return QCC_AF_INET6;
     return QCC_AF_UNSPEC;
 }
+
 //
 // Since the whole point of this package is to provide an OS-independent way to
 // describe the underlying resources of the system, we ned to provide a way to

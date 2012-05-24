@@ -7,7 +7,7 @@
 /******************************************************************************
  *
  *
- * Copyright 2009-2011, Qualcomm Innovation Center, Inc.
+ * Copyright 2009-2012, Qualcomm Innovation Center, Inc.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <assert.h>
 #include <list>
+#include <string.h>
 
 #include <qcc/Debug.h>
 #include <qcc/SocketTypes.h>
@@ -322,7 +323,6 @@ class ScatterGatherList {
             }
             copyCnt -= copyLen;
             QCC_DbgPrintf(("Copied %u bytes (%u left)", copyLen, copyCnt));
-            QCC_DbgLocalData(dest->buf, copyLen);
             pos += copyLen;
         }
         dataSize = static_cast<size_t>(pos - reinterpret_cast<const uint8_t*>(buf));

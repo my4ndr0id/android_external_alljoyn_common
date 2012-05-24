@@ -1,13 +1,5 @@
-/**
- * @file
- *
- * Define a class that abstract's SSL sockets.
- */
-
 /******************************************************************************
- *
- *
- * Copyright 2009-2012, Qualcomm Innovation Center, Inc.
+ * Copyright 2011, Qualcomm Innovation Center, Inc.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -22,17 +14,20 @@
  *    limitations under the License.
  ******************************************************************************/
 
-#ifndef _QCC_SSLSOCKET_H
-#define _QCC_SSLSOCKET_H
+#include <gtest/gtest.h>
 
-#include <qcc/platform.h>
+/** Main entry point */
+int main(int argc, char**argv, char**envArg)
+{
+    int status = 0;
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
 
-#if defined(QCC_OS_GROUP_POSIX)
-#include <qcc/posix/SslSocket.h>
-#elif defined(QCC_OS_GROUP_WINDOWS)
-#include <qcc/windows/SslSocket.h>
-#else
-#error No OS GROUP defined.
-#endif
+    printf("\n Running common unit test \n");
+    testing::InitGoogleTest(&argc, argv);
+    status = RUN_ALL_TESTS();
 
-#endif
+    printf("%s exiting with status %d \n", argv[0], status);
+
+    return (int) status;
+}

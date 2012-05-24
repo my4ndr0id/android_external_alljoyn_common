@@ -98,7 +98,7 @@ class Thread {
      *
      * @return The thread function name.
      */
-    static const char* GetThreadName() { return GetThread()->GetName().c_str(); }
+    static const char* GetThreadName() { return GetThread()->GetName(); }
 
     /**
      * Release and deallocate all threads that are marked as "external"
@@ -240,9 +240,9 @@ class Thread {
     /**
      * Get the name of the thread.
      *
-     * @return  A pointer to a C string of the thread name (may be NULL).
+     * @return  A pointer to a C string of the thread name.
      */
-    qcc::String GetName(void) const { return funcName; }
+    const char* GetName(void) const { return funcName; }
 
     /**
      * Return underlying thread handle.
@@ -344,8 +344,52 @@ class Thread {
         DEAD      /**< Underlying OS thread is gone */
     } state;
 
+
+    class ThreadListLock {
+      public:
+        ThreadListLock() { }
+
+        ~ThreadListLock()
+        {
+            m_destructed = true;
+            delete m_mutex;
+            m_mutex = 0;
+        }
+
+        bool Lock(void)
+        {
+            Mutex* mutex = Get();
+            if (mutex) {
+                mutex->Lock();
+                return true;
+            }
+            return false;
+        }
+
+        void Unlock(void)
+        {
+            Mutex* mutex = Get();
+            if (mutex) {
+                mutex->Unlock();
+            }
+        }
+
+      private:
+        Mutex* Get(void)
+        {
+            if (m_mutex == NULL && m_destructed == false) {
+                m_mutex = new Mutex();
+            }
+            return m_mutex;
+        }
+
+        static Mutex* m_mutex;
+        static bool m_destructed;
+    };
+
+
     bool isStopping;                ///< Thread has received a stop request
-    qcc::String funcName;           ///< Function name (used mostly in debug output).
+    char funcName[80];              ///< Function name (used mostly in debug output).
     ThreadFunction function;        ///< Thread entry point or NULL is using Run() as entry point
     ThreadHandle handle;            ///< Thread handle.
     ThreadReturn exitValue;         ///< The returned 'value' from Run.
@@ -359,16 +403,13 @@ class Thread {
     Mutex auxListenersLock;
 
 #ifdef QCC_OS_GROUP_POSIX
-    struct JoinContext {
-        bool hasBeenJoined;         ///< Indicates that this thread has been joined at least once
-        Mutex lock;                 ///< Mutex that protects hasBeenJoined
-        int32_t count;              ///< Number of threads that have joined this one
-    };
-    JoinContext* joinCtx;
+    int32_t waitCount;
+    Mutex waitLock;
+    bool hasBeenJoined;
 #endif
 
     /** Lock that protects global list of Threads and their handles */
-    static qcc::Mutex threadListLock;
+    static ThreadListLock threadListLock;
 
     /** Thread list */
     static std::map<ThreadHandle, Thread*> threadList;

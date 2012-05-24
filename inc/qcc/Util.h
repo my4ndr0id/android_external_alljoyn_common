@@ -75,6 +75,33 @@
 namespace qcc {
 
 /**
+ * The enum defining the high level operating system on the device.
+ */
+typedef enum _OSType {
+
+    /*Invalid*/
+    NONE = 0,
+
+    /*Android*/
+    ANDROID_OS,
+
+    /*Windows*/
+    WINDOWS_OS,
+
+    /*Darwin*/
+    DARWIN_OS,
+
+    /*Linux*/
+    LINUX_OS
+
+} OSType;
+
+/**
+ * @brief Get the OS type.
+ */
+OSType GetSystemOSType(void);
+
+/**
  * Return an 8 bit random number.
  *
  * @return An 8 bit random number
@@ -198,6 +225,16 @@ QStatus Exec(const char* exec, const ExecArgs& args, const qcc::Environ& envs);
  * @return  ER_OK if program was launched successfully.
  */
 QStatus ExecAs(const char* user, const char* exec, const ExecArgs& args, const qcc::Environ& envs);
+
+
+/**
+ * Computes crc on a buffer using caller's running CRC as a base.
+ *
+ * @param buffer      Pointer to data bytes.
+ * @param bufLen      Number of bytes in buffer.
+ * @param runningCrc  [IN/OUT] Initial CRC16 value on input, final CRC16 value on output.
+ */
+void CRC16_Compute(const uint8_t* buffer, size_t bufLen, uint16_t*runningCrc);
 
 };
 #endif

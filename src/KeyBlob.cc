@@ -83,6 +83,7 @@ KeyBlob::KeyBlob(const qcc::String& secret, size_t len, const Type initType) : b
     } else {
         size = 0;
         data = NULL;
+        role = NO_ROLE;
     }
 }
 
@@ -174,9 +175,10 @@ QStatus KeyBlob::Load(qcc::Source& source)
             }
         }
         if (status == ER_OK) {
-            char tagBytes[MAx_TAG_LEN];
+            char tagBytes[MAx_TAG_LEN + 1];
             status = source.PullBytes(tagBytes, flags & 0x3F, pulled);
             if (status == ER_OK) {
+                tagBytes[pulled] = 0;
                 tag.insert(0, tagBytes, pulled);
             }
         }
@@ -216,6 +218,7 @@ KeyBlob::KeyBlob(const KeyBlob& other)
     } else {
         data = NULL;
         size = 0;
+        role = NO_ROLE;
     }
     blobType = other.blobType;
 }

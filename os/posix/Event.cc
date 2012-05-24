@@ -5,7 +5,7 @@
  */
 
 /******************************************************************************
- * Copyright 2009-2011, Qualcomm Innovation Center, Inc.
+ * Copyright 2009-2012, Qualcomm Innovation Center, Inc.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -326,7 +326,6 @@ static void destroyPipe(int rdFd, int wrFd)
         pipeLock->Unlock();
     } else {
         pipeLock->Unlock();
-        QCC_LogError(ER_FAIL, ("Attempt to destroy non-existent pipe"));
     }
 #endif
 }
@@ -365,14 +364,9 @@ Event::Event(uint32_t timestamp, uint32_t period)
 
 Event::~Event()
 {
-    QStatus status;
-
     /* Threads should not be waiting */
     if ((GEN_PURPOSE == eventType) || (TIMED == eventType)) {
-        status = SetEvent();
-        if (ER_OK != status) {
-            QCC_LogError(status, ("SetEvent failed"));
-        }
+        SetEvent();
     }
 
     /* Destroy eventfd if one was created */

@@ -602,9 +602,8 @@ QStatus Recv(SocketFd sockfd, void* buf, size_t len, size_t& received)
         QCC_DbgHLPrintf(("Recv (sockfd = %u): %d - %s", sockfd, errno, strerror(errno)));
     } else {
         received = static_cast<size_t>(ret);
+        QCC_DbgRemoteData(buf, received);
     }
-
-    QCC_DbgRemoteData(buf, received);
 
     return status;
 }
@@ -793,6 +792,7 @@ QStatus SendWithFds(SocketFd sockfd, const void* buf, size_t len, size_t& sent, 
     struct iovec iov[] = { { const_cast<void*>(buf), len } };
     size_t sz = numFds * sizeof(SocketFd);
     char* cbuf = new char[CMSG_SPACE(sz)];
+    memset(cbuf, 0, CMSG_SPACE(sz));
 
     struct msghdr msg;
     memset(&msg, 0, sizeof(msg));
