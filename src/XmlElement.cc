@@ -38,7 +38,7 @@ using namespace std;
 
 namespace qcc {
 
-static qcc::String escapeXml(const qcc::String str) {
+static qcc::String escapeXml(const qcc::String& str) {
     qcc::String outStr;
     qcc::String::const_iterator it = str.begin();
     int multi = 0;
@@ -114,7 +114,7 @@ static qcc::String escapeXml(const qcc::String str) {
     return outStr;
 }
 
-static qcc::String unescapeXml(const qcc::String str) {
+static qcc::String unescapeXml(const qcc::String& str) {
     bool inEsc = false;
     qcc::String outStr;
     qcc::String escName;
@@ -239,7 +239,7 @@ QStatus XmlElement::Parse(XmlParseContext& ctx)
                 if (IsWhite(c) || ('>' == c)) {
                     if (!ctx.isEndTag) {
                         if (!ctx.curElem) {
-                            ctx.curElem = &ctx.root;
+                            ctx.curElem = ctx.root;
                             ctx.curElem->SetName(ctx.elemName);
                         } else {
                             ctx.curElem = &(ctx.curElem->CreateChild(ctx.elemName));
@@ -254,7 +254,7 @@ QStatus XmlElement::Parse(XmlParseContext& ctx)
                     ctx.rawContent.clear();
                 } else if ('/' == c) {
                     if (!ctx.curElem) {
-                        ctx.curElem = &ctx.root;
+                        ctx.curElem = ctx.root;
                         ctx.curElem->SetName(ctx.elemName);
                     } else {
                         ctx.curElem = &(ctx.curElem->CreateChild(ctx.elemName));
@@ -393,14 +393,27 @@ qcc::String XmlElement::Generate(qcc::String* outStr) const
     return *outStr;
 }
 
-XmlElement& XmlElement::CreateChild(qcc::String name)
+XmlElement& XmlElement::CreateChild(const qcc::String& name)
 {
     QCC_DbgTrace(("XmlElement::CreateChild(\"%s\")", name.c_str()));
     children.push_back(new XmlElement(name, this));
     return *children.back();
 }
 
-const XmlElement* XmlElement::GetChild(qcc::String name) const
+std::vector<const XmlElement*> XmlElement::GetChildren(const qcc::String& name) const
+{
+    std::vector<const XmlElement*> matches;
+    vector<XmlElement*>::const_iterator it = children.begin();
+    while (it != children.end()) {
+        if (0 == name.compare((*it)->GetName())) {
+            matches.push_back(*it);
+        }
+        it++;
+    }
+    return matches;
+}
+
+const XmlElement* XmlElement::GetChild(const qcc::String& name) const
 {
     vector<XmlElement*>::const_iterator it = children.begin();
     while (it != children.end()) {
@@ -412,20 +425,63 @@ const XmlElement* XmlElement::GetChild(qcc::String name) const
     return NULL;
 }
 
-qcc::String XmlElement::GetAttribute(qcc::String attName) const
+const qcc::String& XmlElement::GetAttribute(const char* attName) const
+{
+    return GetAttribute(String(attName));
+}
+
+const qcc::String& XmlElement::GetAttribute(const qcc::String& attName) const
 {
     map<qcc::String, qcc::String>::const_iterator it = attributes.find(attName);
     if (it == attributes.end()) {
-        return "";
+        return String::Empty;
     } else {
         return it->second;
     }
 }
 
+std::vector<const XmlElement*> XmlElement::GetPath(const qcc::String& inPath) const
+{
+    std::vector<const XmlElement*> matches;
+    qcc::String val;
+    qcc::String attr;
+    qcc::String path = inPath;
+
+    /* Strip attribute from the path if present */
+    size_t pos = path.find_first_of('@');
+    if (pos != String::npos) {
+        attr = path.substr(pos + 1);
+        path.erase(pos);
+    }
+    pos = path.find_first_of('/');
+    const XmlElement* xml = this;
+    while (xml) {
+        if (pos == String::npos) {
+            matches = xml->GetChildren(path.substr(0, pos));
+            break;
+        }
+        xml = xml->GetChild(path.substr(0, pos));
+        path.erase(0, pos + 1);
+        pos = path.find_first_of('/');
+    }
+    /* Filter out matches that don't have the required attribute */
+    if (!attr.empty()) {
+        vector<const XmlElement*>::iterator it = matches.begin();
+        while (it != matches.end()) {
+            if ((*it)->GetAttribute(attr).empty()) {
+                it = matches.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    return matches;
+}
 
 void XmlParseContext::Reset()
 {
-    root = XmlElement();
+    delete root;
+    root = new XmlElement();
     parseState = IN_ELEMENT;
     curElem = NULL;
     elemName.clear();

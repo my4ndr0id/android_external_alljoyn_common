@@ -93,6 +93,26 @@ Thread* Thread::GetThread()
     return ret;
 }
 
+const char* Thread::GetThreadName()
+{
+    Thread* thread = NULL;
+
+    /* Find thread on Thread::threadList */
+    threadListLock.Lock();
+    map<ThreadHandle, Thread*>::const_iterator iter = threadList.find(pthread_self());
+    if (iter != threadList.end()) {
+        thread = iter->second;
+    }
+    threadListLock.Unlock();
+
+    /* If the current thread isn't on the list, then don't create an external (wrapper) thread */
+    if (thread == NULL) {
+        return "external";
+    }
+
+    return thread->GetName();
+}
+
 void Thread::CleanExternalThreads()
 {
     threadListLock.Lock();
@@ -133,13 +153,13 @@ Thread::Thread(qcc::String name, Thread::ThreadFunction func, bool isExternal) :
     strncpy(funcName, name.c_str(), sizeof(funcName));
     funcName[sizeof(funcName)] = '\0';
 
+    /* If this is an external thread, add it to the thread list here since Run will not be called */
     if (isExternal) {
         assert(func == NULL);
         threadListLock.Lock();
         threadList[handle] = this;
         threadListLock.Unlock();
     }
-    /* If this is an external thread, add it to the thread list here since Run will not be called */
     QCC_DbgHLPrintf(("Thread::Thread() created %s - %x -- started:%d running:%d joined:%d", funcName, handle, started, running, joined));
 }
 
@@ -258,7 +278,7 @@ QStatus Thread::Start(void* arg, ThreadListener* listener)
     }
 
     if (status != ER_OK) {
-        QCC_LogError(status, ("Thread::Start"));
+        QCC_LogError(status, ("Thread::Start [%s]", funcName));
     } else {
         int ret;
 
@@ -302,7 +322,7 @@ QStatus Thread::Stop(void)
     if (isExternal) {
         QCC_LogError(ER_EXTERNAL_THREAD, ("Cannot stop an external thread"));
         return ER_EXTERNAL_THREAD;
-    } else if (state == DEAD) {
+    } else if ((state == DEAD) || (state == INITIAL)) {
         QCC_DbgPrintf(("Thread::Stop() thread is dead [%s]", funcName));
         return ER_OK;
     } else {
@@ -397,6 +417,7 @@ QStatus Thread::Join(void)
      */
     if (state == DEAD) {
         QCC_DbgPrintf(("Thread::Join() thread is dead [%s]", funcName));
+        isStopping = false;
         return ER_OK;
     }
     /*
